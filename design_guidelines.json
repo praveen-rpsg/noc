@@ -1,0 +1,138 @@
+{
+  "identity": {
+    "name": "NOC Commander",
+    "archetype": "The Performance Pro (Light Edition)",
+    "description": "A high-precision, tactical monitoring interface designed for clarity and speed. It eschews decorative gradients for high-contrast data visualization.",
+    "principles": [
+      "Zero Noise: If it's not data or a critical action, remove it.",
+      "Tactical Clarity: Use color ONLY for status (Green/Red/Yellow). UI chrome should be invisible.",
+      "Density with Breath: High data density in tables, but clear separation between widgets.",
+      "Optical Precision: Align everything to the pixel. No fuzzy edges."
+    ]
+  },
+  "typography": {
+    "primary_font": "Public Sans",
+    "heading_font": "Manrope",
+    "mono_font": "JetBrains Mono",
+    "scale": {
+      "h1": "text-4xl font-bold tracking-tight",
+      "h2": "text-3xl font-semibold tracking-tight",
+      "h3": "text-2xl font-semibold tracking-tight",
+      "h4": "text-xl font-medium tracking-tight",
+      "body": "text-base font-normal leading-relaxed",
+      "small": "text-sm font-medium leading-normal",
+      "tiny": "text-xs font-semibold tracking-wide uppercase"
+    },
+    "imports": [
+      "https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Public+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap"
+    ]
+  },
+  "colors": {
+    "theme": "light",
+    "palette": {
+      "background": "hsl(210 20% 98%)",
+      "foreground": "hsl(222 47% 11%)",
+      "card": "hsl(0 0% 100%)",
+      "card_foreground": "hsl(222 47% 11%)",
+      "popover": "hsl(0 0% 100%)",
+      "popover_foreground": "hsl(222 47% 11%)",
+      "primary": "hsl(222 47% 11%)",
+      "primary_foreground": "hsl(210 40% 98%)",
+      "secondary": "hsl(210 40% 96.1%)",
+      "secondary_foreground": "hsl(222 47% 11%)",
+      "muted": "hsl(210 40% 96.1%)",
+      "muted_foreground": "hsl(215 16% 47%)",
+      "accent": "hsl(210 40% 96.1%)",
+      "accent_foreground": "hsl(222 47% 11%)",
+      "destructive": "hsl(0 84.2% 60.2%)",
+      "destructive_foreground": "hsl(210 40% 98%)",
+      "border": "hsl(214 32% 91%)",
+      "input": "hsl(214 32% 91%)",
+      "ring": "hsl(222 47% 11%)",
+      "chart_1": "hsl(222 47% 11%)",
+      "chart_2": "hsl(142 71% 45%)",
+      "chart_3": "hsl(0 84% 60%)",
+      "chart_4": "hsl(38 92% 50%)",
+      "chart_5": "hsl(262 83% 58%)"
+    },
+    "status": {
+      "success": "text-green-600 bg-green-50 border-green-200",
+      "warning": "text-amber-600 bg-amber-50 border-amber-200",
+      "error": "text-red-600 bg-red-50 border-red-200",
+      "info": "text-blue-600 bg-blue-50 border-blue-200"
+    }
+  },
+  "layout": {
+    "grid_system": {
+      "dashboard": "grid grid-cols-1 md:grid-cols-12 gap-6",
+      "bento_dense": "grid grid-cols-1 md:grid-cols-4 gap-4"
+    },
+    "spacing": {
+      "container_padding": "p-6 md:p-8",
+      "section_gap": "gap-8",
+      "item_gap": "gap-4"
+    },
+    "containers": {
+      "card": "bg-card text-card-foreground rounded-lg border shadow-sm",
+      "panel": "bg-white rounded-xl border border-border/60 shadow-[0_2px_8px_rgba(0,0,0,0.04)]"
+    }
+  },
+  "components": {
+    "buttons": {
+      "default": "rounded-md font-medium transition-all active:scale-95 shadow-sm",
+      "primary": "bg-primary text-primary-foreground hover:bg-primary/90",
+      "outline": "border border-input bg-background hover:bg-accent hover:text-accent-foreground",
+      "ghost": "hover:bg-accent hover:text-accent-foreground"
+    },
+    "inputs": {
+      "default": "h-10 rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
+    },
+    "cards": {
+      "stat": "flex flex-col gap-2 p-6 bg-white border border-border/50 shadow-sm rounded-xl hover:shadow-md transition-shadow",
+      "chart": "p-6 bg-white border border-border/50 shadow-sm rounded-xl"
+    },
+    "badges": {
+      "pill": "rounded-full px-2.5 py-0.5 text-xs font-semibold transition-colors focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
+    }
+  },
+  "visual_enhancers": {
+    "shadows": {
+      "soft": "shadow-[0_2px_10px_rgba(0,0,0,0.03)]",
+      "float": "shadow-[0_10px_30px_rgba(0,0,0,0.08)]"
+    },
+    "borders": {
+      "subtle": "border border-slate-100",
+      "active": "border-l-4 border-primary"
+    },
+    "glass": "bg-white/80 backdrop-blur-md border border-white/20"
+  },
+  "image_urls": {
+    "logo_placeholder": "https://placehold.co/150x50/1a1a1a/ffffff?text=NOC+Pro",
+    "user_avatar": "https://api.dicebear.com/7.x/avataaars/svg?seed=NOCAdmin"
+  },
+  "instructions_to_main_agent": [
+    "Install 'recharts' for data visualization: `npm install recharts` or `yarn add recharts`.",
+    "Install 'lucide-react' for icons: `npm install lucide-react`.",
+    "Use 'Public Sans' for all body text and 'Manrope' for headings. Update tailwind.config.js to include these.",
+    "For the 'Performance Pro' Light look, maintain strict whitespace. Do not clutter.",
+    "Use the color palette provided in the 'colors' section. Update css variables in index.css.",
+    "Ensure all interactive elements have `data-testid` attributes.",
+    "Implement the 'Bento Grid Mode B' for the main dashboard view.",
+    "Use 'sonner' for notifications/alerts.",
+    "Prioritize 'Red/Green/Amber' indicators for status over generic blues.",
+    "Create a 'Sidebar' layout for navigation to maximize vertical screen real estate for data."
+  ],
+  "universal_guidelines": [
+    "You tend to converge toward generic, 'on distribution' outputs. Avoid this.",
+    "Don't make generic centered layouts, simplistic gradients, and uniform styling.",
+    "Create depth through layered design elements with z-index hierarchy.",
+    "Use glass-morphism effects sparingly in this Light theme (mostly for sticky headers).",
+    "You MUST NOT apply universal transition. Eg: `transition: all`. This results in breaking transforms.",
+    "You MUST NOT center align the app container.",
+    "Always use modern button styles like pill-shaped, or sharp button with interaction animations.",
+    "NEVER use AI assistant Emoji characters for icons.",
+    "Every interaction needs micro-animations - hover states, transitions.",
+    "Components MUST use named exports.",
+    "Pages MUST use default exports."
+  ]
+}
