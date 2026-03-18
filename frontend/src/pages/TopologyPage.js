@@ -147,61 +147,88 @@ export default function TopologyPage() {
     fetchTopology();
   }, []);
 
-  // Initialize node positions when topology loads
+  // Initialize node positions when topology loads or after reset
   useEffect(() => {
     if (topology.nodes.length === 0) return;
     
-    const canvas = canvasRef.current;
-    if (!canvas) return;
+    // Check if we already have valid positions for all nodes
+    const nodeIds = topology.nodes.map(n => n.id);
+    const hasAllPositions = nodeIds.every(id => nodePositions[id] !== undefined);
+    if (hasAllPositions) return;
     
-    const width = canvas.width || 800;
-    const height = canvas.height || 600;
+    // Use fixed dimensions for calculation
+    const width = 1100;
+    const height = 600;
     
-    // Load saved positions from localStorage
+    // Try to load from localStorage first
     const savedPositions = localStorage.getItem('topologyPositions');
     if (savedPositions) {
-      const parsed = JSON.parse(savedPositions);
-      // Check if saved positions match current nodes
-      const savedNodeIds = Object.keys(parsed);
-      const currentNodeIds = topology.nodes.map(n => n.id);
-      const allMatch = currentNodeIds.every(id => savedNodeIds.includes(id));
-      
-      if (allMatch) {
-        setNodePositions(parsed);
-        return;
+      try {
+        const parsed = JSON.parse(savedPositions);
+        const savedNodeIds = Object.keys(parsed);
+        const allMatch = nodeIds.every(id => savedNodeIds.includes(id));
+        
+        if (allMatch && savedNodeIds.length === nodeIds.length) {
+          setNodePositions(parsed);
+          return;
+        }
+      } catch (e) {
+        // Invalid JSON, will regenerate
       }
     }
     
-    // Calculate initial positions based on location groups
-    const locationGroups = {};
+    // Calculate hierarchical layout
+    const typeGroups = {};
     topology.nodes.forEach(node => {
-      const loc = node.location || 'Unknown';
-      if (!locationGroups[loc]) {
-        locationGroups[loc] = [];
-      }
-      locationGroups[loc].push(node);
+      const type = node.type || 'unknown';
+      if (!typeGroups[type]) typeGroups[type] = [];
+      typeGroups[type].push(node);
     });
 
-    const locations = Object.keys(locationGroups);
-    const locationSpacing = width / (locations.length + 1);
     const newPositions = {};
-
-    locations.forEach((loc, locIndex) => {
-      const nodes = locationGroups[loc];
-      const x = locationSpacing * (locIndex + 1);
-      const nodeSpacing = height / (nodes.length + 1);
-      
-      nodes.forEach((node, nodeIndex) => {
-        newPositions[node.id] = {
-          x: x + (Math.random() - 0.5) * 30,
-          y: nodeSpacing * (nodeIndex + 1),
-        };
+    const margin = 100;
+    const usableWidth = width - margin * 2;
+    const usableHeight = height - margin * 2;
+    
+    // Core layer: routers, firewalls
+    const coreDevices = [...(typeGroups['router'] || []), ...(typeGroups['firewall'] || [])];
+    // Distribution layer: switches, load balancers
+    const distDevices = [...(typeGroups['switch'] || []), ...(typeGroups['load_balancer'] || [])];
+    // Access layer: servers, VMs, cloud, APs
+    const accessDevices = [
+      ...(typeGroups['server'] || []),
+      ...(typeGroups['virtual_machine'] || []),
+      ...(typeGroups['cloud_instance'] || []),
+      ...(typeGroups['access_point'] || [])
+    ];
+    
+    // Top row - Core (y = 15%)
+    if (coreDevices.length > 0) {
+      const spacing = usableWidth / (coreDevices.length + 1);
+      coreDevices.forEach((node, i) => {
+        newPositions[node.id] = { x: margin + spacing * (i + 1), y: margin + usableHeight * 0.15 };
       });
-    });
+    }
+    
+    // Middle row - Distribution (y = 50%)
+    if (distDevices.length > 0) {
+      const spacing = usableWidth / (distDevices.length + 1);
+      distDevices.forEach((node, i) => {
+        newPositions[node.id] = { x: margin + spacing * (i + 1), y: margin + usableHeight * 0.50 };
+      });
+    }
+    
+    // Bottom row - Access (y = 85%)
+    if (accessDevices.length > 0) {
+      const spacing = usableWidth / (accessDevices.length + 1);
+      accessDevices.forEach((node, i) => {
+        newPositions[node.id] = { x: margin + spacing * (i + 1), y: margin + usableHeight * 0.85 };
+      });
+    }
 
     setNodePositions(newPositions);
     localStorage.setItem('topologyPositions', JSON.stringify(newPositions));
-  }, [topology.nodes]);
+  }, [topology.nodes, nodePositions]);
 
   // Draw 3D colorful node
   const draw3DNode = useCallback((ctx, x, y, node, isSelected, size) => {
@@ -579,20 +606,24 @@ export default function TopologyPage() {
     }
   }, [getCanvasCoords, findNodeAtPosition, deviceUrls]);
 
-  // Canvas resize handler
+  // Canvas resize handler - must run before position calculation
   useEffect(() => {
     const handleResize = () => {
       const canvas = canvasRef.current;
-      if (canvas) {
-        canvas.width = canvas.parentElement.clientWidth;
+      if (canvas && canvas.parentElement) {
+        canvas.width = canvas.parentElement.clientWidth || 1100;
         canvas.height = 600;
-        drawTopology();
       }
     };
 
     handleResize();
     window.addEventListener('resize', handleResize);
     return () => window.removeEventListener('resize', handleResize);
+  }, []);
+
+  // Re-draw when positions or topology changes
+  useEffect(() => {
+    drawTopology();
   }, [drawTopology]);
 
   // Attach event listeners
@@ -620,6 +651,18 @@ export default function TopologyPage() {
   const handleResetView = () => {
     setZoom(1);
     setPan({ x: 0, y: 0 });
+  };
+
+  const handleResetLayout = () => {
+    // Clear saved positions
+    localStorage.removeItem('topologyPositions');
+    // Reset node positions state to empty to force recalculation
+    setNodePositions({});
+    
+    // Fetch topology again to trigger position recalculation
+    setLoading(true);
+    fetchTopology();
+    toast.success('Layout reset successfully');
   };
 
   const handleSaveDeviceUrl = () => {
@@ -673,6 +716,9 @@ export default function TopologyPage() {
           </Button>
           <Button variant="outline" size="icon" onClick={handleResetView} title="Reset view">
             <Move className="h-4 w-4" />
+          </Button>
+          <Button variant="outline" onClick={handleResetLayout} title="Reset node positions to default layout">
+            Reset Layout
           </Button>
           <Button variant="outline" onClick={fetchTopology} data-testid="refresh-topology">
             <RefreshCw className="h-4 w-4 mr-2" />
@@ -747,6 +793,8 @@ export default function TopologyPage() {
               <div className="relative bg-gradient-to-br from-slate-50 to-slate-100 rounded-lg overflow-hidden border">
                 <canvas 
                   ref={canvasRef} 
+                  width={1100}
+                  height={600}
                   className="w-full"
                   style={{ height: '600px', cursor: isDragging ? 'grabbing' : 'default' }}
                 />

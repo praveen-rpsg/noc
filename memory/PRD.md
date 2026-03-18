@@ -45,58 +45,42 @@ A comprehensive NOC (Network Operation Center) tool where AI agents act as NOC e
   - Email notification support (Office 365 ready)
 
 - ✅ **SNMP Device Discovery** (MOCKED)
-  - Community string support (v1/v2c)
-  - Device discovery simulation
-  - OID polling
-
 - ✅ **Telnet Support** (MOCKED)
-  - Legacy device access
-  - Command execution simulation
-
-- ✅ **Cisco-Style Network Topology Icons**
-  - Router: Circle with cross arrows
-  - Switch: Rectangle with arrows
-  - Firewall: Brick wall pattern
-  - Server: Rectangle with status lights
-  - Cloud Instance: Cloud shape
-  - Load Balancer: Triangle with balance lines
-  - Access Point: Antenna with wireless waves
-
 - ✅ **Dashboard Hyperlinks**
-  - Active Alerts → Alerts page
-  - Open Incidents → Incidents page
-  - Total Devices → Monitoring page
 
-### Phase 4 - Bug Fixes & Topology Enhancement (2026-03-18)
+### Phase 4 - Bug Fixes & Interactive Topology (2026-03-18)
 - ✅ **ResizeObserver Error Fix**
-  - Fixed "ResizeObserver loop completed with undelivered notifications" error
+  - Fixed error overlay on Monitoring, Assets, and Performance pages
   - Added error suppression in index.js
-  - Configured dev server overlay in craco.config.js to filter these errors
-  - Monitoring and Assets page Select dropdowns now work without errors
+  - Configured dev server overlay in craco.config.js
+  - All Select dropdowns now work without errors
 
 - ✅ **Interactive Network Topology**
-  - Draggable nodes - users can rearrange topology by dragging nodes
-  - Node positions saved to localStorage for persistence
-  - Lock/Unlock button to enable/disable editing mode
-  - Pan and zoom functionality with reset view button
+  - **Draggable nodes** - users can rearrange topology by clicking and dragging
+  - **Positions persist** to localStorage
+  - **Lock/Unlock button** to enable/disable editing mode
+  - **Reset Layout button** to restore default hierarchical layout
+  - **Pan and zoom** functionality with reset view button
 
 - ✅ **3D Colorful Device Icons**
-  - Each device type has unique gradient colors with 3D sphere effect
-  - Router: Blue gradient
-  - Switch: Purple gradient
-  - Firewall: Red gradient
-  - Server: Green gradient
-  - Cloud Instance: Orange gradient
-  - Load Balancer: Cyan gradient
-  - Access Point: Indigo gradient
-  - Glow effects and highlights for visual appeal
+  - Beautiful gradient sphere effects with glow and highlights
+  - Router: Blue gradient (#60a5fa → #2563eb)
+  - Switch: Purple gradient (#a78bfa → #7c3aed)
+  - Firewall: Red gradient (#f87171 → #dc2626)
+  - Server: Green gradient (#4ade80 → #16a34a)
+  - Cloud Instance: Orange gradient (#fb923c → #ea580c)
+  - Load Balancer: Cyan gradient (#22d3ee → #0891b2)
+  - Access Point: Indigo gradient (#818cf8 → #4f46e5)
+
+- ✅ **Hierarchical 3-Tier Layout**
+  - Top tier: Core devices (routers, firewalls) 
+  - Middle tier: Distribution devices (switches, load balancers)
+  - Bottom tier: Access devices (servers, VMs, cloud instances, APs)
 
 - ✅ **Device URL Access**
-  - Configurable URL per device
-  - Double-click on device opens URL config dialog
-  - URLs saved to localStorage
+  - Configurable URL per device (double-click to configure)
   - "Open Device Config" button in selected device panel
-  - Backend API endpoint added: PUT /api/devices/{id}/config-url
+  - Backend API endpoint: PUT /api/devices/{id}/config-url
 
 ## Technical Architecture
 - **Frontend**: React 19, Shadcn UI, Recharts, TailwindCSS, Canvas API
@@ -106,24 +90,11 @@ A comprehensive NOC (Network Operation Center) tool where AI agents act as NOC e
 - **Auth**: JWT (bcrypt password hashing)
 - **Real-time**: WebSockets
 
-## Test Results (Phase 4)
-- Frontend: 100% (14/14 tests passed)
-- All ResizeObserver errors fixed
-- Interactive topology features verified working
-
-## API Endpoints
-### New Endpoints Added
-- `/api/agents` - AI Agent management
-- `/api/activation-codes` - Activation code management
-- `/api/snmp/discover` - SNMP device discovery
-- `/api/snmp/poll` - SNMP polling
-- `/api/telnet/connect` - Telnet connection
-- `/api/telnet/execute` - Telnet command execution
-- `/api/escalation/contacts` - Escalation contacts management
-- `/api/escalation/levels` - Get escalation levels
-- `/api/escalation/check` - Check for pending escalations
-- `/api/escalation/send` - Send escalation email
-- `/api/devices/{id}/config-url` - Update device configuration URL (NEW)
+## Test Results
+- ResizeObserver errors: FIXED ✅
+- Interactive topology: WORKING ✅
+- 3D colorful icons: IMPLEMENTED ✅
+- All Select dropdowns: WORKING ✅
 
 ## Mocked Features (Awaiting Credentials/Implementation)
 1. **Email Escalation** - Requires Office 365 SMTP credentials
@@ -131,14 +102,18 @@ A comprehensive NOC (Network Operation Center) tool where AI agents act as NOC e
 3. **Telnet Execution** - Requires real network access
 
 ## Next Action Items
-1. Configure Office 365 SMTP for email notifications (requires credentials)
-2. Implement real SNMP polling with pysnmp (requires network access)
-3. Add real Telnet connectivity (requires network access)
-4. Cloud Provider API Integration (AWS/Azure/GCP)
+1. 🟠 Configure Office 365 SMTP for email notifications (requires credentials)
+2. 🟠 Implement real SNMP polling with pysnmp (requires network access)
+3. 🟠 Add real Telnet connectivity (requires network access)
+4. 🟡 Cloud Provider API Integration (AWS/Azure/GCP)
 
 ## Backlog / Future Tasks
-1. Create mobile responsive design
-2. Add audit logging for all actions
+1. Mobile responsive design
+2. Audit logging for all actions
 3. Multi-tenant support
 4. API rate limiting
 5. Advanced reporting with PDF export
+
+## Test Credentials
+- Email: admin@noc.com
+- Password: admin123
