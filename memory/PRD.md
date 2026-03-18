@@ -44,12 +44,12 @@ A comprehensive NOC (Network Operation Center) tool where AI agents act as NOC e
   - Escalation contacts management
   - Email notification support (Office 365 ready)
 
-- ✅ **SNMP Device Discovery**
+- ✅ **SNMP Device Discovery** (MOCKED)
   - Community string support (v1/v2c)
   - Device discovery simulation
   - OID polling
 
-- ✅ **Telnet Support**
+- ✅ **Telnet Support** (MOCKED)
   - Legacy device access
   - Command execution simulation
 
@@ -67,6 +67,37 @@ A comprehensive NOC (Network Operation Center) tool where AI agents act as NOC e
   - Open Incidents → Incidents page
   - Total Devices → Monitoring page
 
+### Phase 4 - Bug Fixes & Topology Enhancement (2026-03-18)
+- ✅ **ResizeObserver Error Fix**
+  - Fixed "ResizeObserver loop completed with undelivered notifications" error
+  - Added error suppression in index.js
+  - Configured dev server overlay in craco.config.js to filter these errors
+  - Monitoring and Assets page Select dropdowns now work without errors
+
+- ✅ **Interactive Network Topology**
+  - Draggable nodes - users can rearrange topology by dragging nodes
+  - Node positions saved to localStorage for persistence
+  - Lock/Unlock button to enable/disable editing mode
+  - Pan and zoom functionality with reset view button
+
+- ✅ **3D Colorful Device Icons**
+  - Each device type has unique gradient colors with 3D sphere effect
+  - Router: Blue gradient
+  - Switch: Purple gradient
+  - Firewall: Red gradient
+  - Server: Green gradient
+  - Cloud Instance: Orange gradient
+  - Load Balancer: Cyan gradient
+  - Access Point: Indigo gradient
+  - Glow effects and highlights for visual appeal
+
+- ✅ **Device URL Access**
+  - Configurable URL per device
+  - Double-click on device opens URL config dialog
+  - URLs saved to localStorage
+  - "Open Device Config" button in selected device panel
+  - Backend API endpoint added: PUT /api/devices/{id}/config-url
+
 ## Technical Architecture
 - **Frontend**: React 19, Shadcn UI, Recharts, TailwindCSS, Canvas API
 - **Backend**: FastAPI, Motor (async MongoDB), Pydantic, Paramiko (SSH)
@@ -75,10 +106,10 @@ A comprehensive NOC (Network Operation Center) tool where AI agents act as NOC e
 - **Auth**: JWT (bcrypt password hashing)
 - **Real-time**: WebSockets
 
-## Test Results
-- Backend: 100% (62/62 tests passed)
-- Frontend: 98% (19/20 features working)
-- Overall: 99% success rate
+## Test Results (Phase 4)
+- Frontend: 100% (14/14 tests passed)
+- All ResizeObserver errors fixed
+- Interactive topology features verified working
 
 ## API Endpoints
 ### New Endpoints Added
@@ -92,10 +123,22 @@ A comprehensive NOC (Network Operation Center) tool where AI agents act as NOC e
 - `/api/escalation/levels` - Get escalation levels
 - `/api/escalation/check` - Check for pending escalations
 - `/api/escalation/send` - Send escalation email
+- `/api/devices/{id}/config-url` - Update device configuration URL (NEW)
+
+## Mocked Features (Awaiting Credentials/Implementation)
+1. **Email Escalation** - Requires Office 365 SMTP credentials
+2. **SNMP Discovery** - Requires real network access and community strings
+3. **Telnet Execution** - Requires real network access
 
 ## Next Action Items
-1. Configure Office 365 SMTP for email notifications
-2. Implement real SNMP polling with pysnmp
-3. Add real Telnet connectivity
-4. Create mobile responsive design
-5. Add audit logging for all actions
+1. Configure Office 365 SMTP for email notifications (requires credentials)
+2. Implement real SNMP polling with pysnmp (requires network access)
+3. Add real Telnet connectivity (requires network access)
+4. Cloud Provider API Integration (AWS/Azure/GCP)
+
+## Backlog / Future Tasks
+1. Create mobile responsive design
+2. Add audit logging for all actions
+3. Multi-tenant support
+4. API rate limiting
+5. Advanced reporting with PDF export

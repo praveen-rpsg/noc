@@ -829,10 +829,10 @@ export default function TopologyPage() {
                   <span className="font-medium">{selectedNode.name}</span>
                 </div>
                 <div className="text-sm space-y-1">
-                  <p><span className="text-muted-foreground">Type:</span> {selectedNode.type}</p>
-                  <p><span className="text-muted-foreground">IP:</span> <code className="text-xs bg-muted px-1 rounded">{selectedNode.ip}</code></p>
-                  <p><span className="text-muted-foreground">Location:</span> {selectedNode.location}</p>
-                  <p><span className="text-muted-foreground">Status:</span> <Badge variant="outline" className="capitalize">{selectedNode.status}</Badge></p>
+                  <div><span className="text-muted-foreground">Type:</span> {selectedNode.type}</div>
+                  <div><span className="text-muted-foreground">IP:</span> <code className="text-xs bg-muted px-1 rounded">{selectedNode.ip}</code></div>
+                  <div><span className="text-muted-foreground">Location:</span> {selectedNode.location}</div>
+                  <div><span className="text-muted-foreground">Status:</span> <Badge variant="outline" className="capitalize ml-1">{selectedNode.status}</Badge></div>
                 </div>
                 {deviceUrls[selectedNode.id] && (
                   <Button 
