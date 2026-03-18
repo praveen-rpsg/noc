@@ -185,6 +185,7 @@ class Device(BaseModel):
     model: Optional[str] = None
     serial_number: Optional[str] = None
     firmware_version: Optional[str] = None
+    config_url: Optional[str] = None  # URL to device configuration page
     last_seen: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     cpu_usage: float = 0.0
     memory_usage: float = 0.0
@@ -201,6 +202,7 @@ class DeviceCreate(BaseModel):
     model: Optional[str] = None
     serial_number: Optional[str] = None
     firmware_version: Optional[str] = None
+    config_url: Optional[str] = None  # URL to device configuration page
     tags: List[str] = []
 
 class Alert(BaseModel):
@@ -483,6 +485,16 @@ async def update_device(device_id: str, device_data: DeviceCreate, current_user:
     
     updated = await db.devices.find_one({"id": device_id}, {"_id": 0})
     return Device(**serialize_doc(updated))
+
+@devices_router.put("/{device_id}/config-url")
+async def update_device_config_url(device_id: str, config_url: str = None, current_user: dict = Depends(get_current_user)):
+    """Update device configuration URL"""
+    existing = await db.devices.find_one({"id": device_id})
+    if not existing:
+        raise HTTPException(status_code=404, detail="Device not found")
+    
+    await db.devices.update_one({"id": device_id}, {"$set": {"config_url": config_url}})
+    return {"message": "Config URL updated", "config_url": config_url}
 
 @devices_router.delete("/{device_id}")
 async def delete_device(device_id: str, current_user: dict = Depends(get_current_user)):

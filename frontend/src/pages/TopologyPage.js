@@ -2,19 +2,22 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
 import { Button } from '../components/ui/button';
 import { Badge } from '../components/ui/badge';
+import { Input } from '../components/ui/input';
+import { Label } from '../components/ui/label';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '../components/ui/dialog';
 import { toast } from 'sonner';
 import axios from 'axios';
 import {
   Network,
   RefreshCw,
   Server,
-  Router,
-  Shield,
-  Cloud,
-  HardDrive,
-  Wifi,
   ZoomIn,
-  ZoomOut
+  ZoomOut,
+  Move,
+  Lock,
+  Unlock,
+  ExternalLink,
+  Settings
 } from 'lucide-react';
 
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
@@ -34,35 +37,76 @@ const StatusBadge = ({ status }) => {
   );
 };
 
-const getDeviceIcon = (type) => {
-  const icons = {
-    router: Router,
-    switch: Server,
-    firewall: Shield,
-    load_balancer: HardDrive,
-    server: Server,
-    virtual_machine: Cloud,
-    cloud_instance: Cloud,
-    access_point: Wifi,
-  };
-  return icons[type] || Server;
-};
-
-const getDeviceColor = (type, status) => {
-  if (status === 'offline') return '#ef4444';
-  if (status === 'degraded') return '#f59e0b';
+// 3D colorful gradient colors for device types
+const getDevice3DColors = (type, status) => {
+  if (status === 'offline') {
+    return {
+      gradient1: '#ef4444',
+      gradient2: '#dc2626',
+      shadow: 'rgba(239, 68, 68, 0.4)',
+      glow: 'rgba(239, 68, 68, 0.6)'
+    };
+  }
+  if (status === 'degraded') {
+    return {
+      gradient1: '#f59e0b',
+      gradient2: '#d97706',
+      shadow: 'rgba(245, 158, 11, 0.4)',
+      glow: 'rgba(245, 158, 11, 0.6)'
+    };
+  }
   
-  const colors = {
-    router: '#3b82f6',
-    switch: '#8b5cf6',
-    firewall: '#ef4444',
-    load_balancer: '#06b6d4',
-    server: '#22c55e',
-    virtual_machine: '#14b8a6',
-    cloud_instance: '#f97316',
-    access_point: '#6366f1',
+  const colorSchemes = {
+    router: {
+      gradient1: '#60a5fa',
+      gradient2: '#2563eb',
+      shadow: 'rgba(37, 99, 235, 0.4)',
+      glow: 'rgba(96, 165, 250, 0.6)'
+    },
+    switch: {
+      gradient1: '#a78bfa',
+      gradient2: '#7c3aed',
+      shadow: 'rgba(124, 58, 237, 0.4)',
+      glow: 'rgba(167, 139, 250, 0.6)'
+    },
+    firewall: {
+      gradient1: '#f87171',
+      gradient2: '#dc2626',
+      shadow: 'rgba(220, 38, 38, 0.4)',
+      glow: 'rgba(248, 113, 113, 0.6)'
+    },
+    load_balancer: {
+      gradient1: '#22d3ee',
+      gradient2: '#0891b2',
+      shadow: 'rgba(8, 145, 178, 0.4)',
+      glow: 'rgba(34, 211, 238, 0.6)'
+    },
+    server: {
+      gradient1: '#4ade80',
+      gradient2: '#16a34a',
+      shadow: 'rgba(22, 163, 74, 0.4)',
+      glow: 'rgba(74, 222, 128, 0.6)'
+    },
+    virtual_machine: {
+      gradient1: '#2dd4bf',
+      gradient2: '#0d9488',
+      shadow: 'rgba(13, 148, 136, 0.4)',
+      glow: 'rgba(45, 212, 191, 0.6)'
+    },
+    cloud_instance: {
+      gradient1: '#fb923c',
+      gradient2: '#ea580c',
+      shadow: 'rgba(234, 88, 12, 0.4)',
+      glow: 'rgba(251, 146, 60, 0.6)'
+    },
+    access_point: {
+      gradient1: '#818cf8',
+      gradient2: '#4f46e5',
+      shadow: 'rgba(79, 70, 229, 0.4)',
+      glow: 'rgba(129, 140, 248, 0.6)'
+    },
   };
-  return colors[type] || '#64748b';
+  return colorSchemes[type] || colorSchemes.server;
 };
 
 export default function TopologyPage() {
@@ -72,11 +116,26 @@ export default function TopologyPage() {
   const [selectedNode, setSelectedNode] = useState(null);
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
+  const [nodePositions, setNodePositions] = useState({});
+  const [isDragging, setIsDragging] = useState(false);
+  const [draggedNode, setDraggedNode] = useState(null);
+  const [isLocked, setIsLocked] = useState(false);
+  const [isPanning, setIsPanning] = useState(false);
+  const [lastPanPoint, setLastPanPoint] = useState({ x: 0, y: 0 });
+  const [configDialogOpen, setConfigDialogOpen] = useState(false);
+  const [deviceUrls, setDeviceUrls] = useState({});
+  const [editingDeviceUrl, setEditingDeviceUrl] = useState('');
 
   const fetchTopology = async () => {
     try {
       const response = await axios.get(`${API}/topology/data`);
       setTopology(response.data);
+      
+      // Load saved device URLs from localStorage
+      const savedUrls = localStorage.getItem('deviceUrls');
+      if (savedUrls) {
+        setDeviceUrls(JSON.parse(savedUrls));
+      }
     } catch (error) {
       toast.error('Failed to fetch topology data');
     } finally {
@@ -88,21 +147,32 @@ export default function TopologyPage() {
     fetchTopology();
   }, []);
 
-  const drawTopology = useCallback(() => {
+  // Initialize node positions when topology loads
+  useEffect(() => {
+    if (topology.nodes.length === 0) return;
+    
     const canvas = canvasRef.current;
-    if (!canvas || topology.nodes.length === 0) return;
-
-    const ctx = canvas.getContext('2d');
-    const width = canvas.width;
-    const height = canvas.height;
-
-    // Clear canvas
-    ctx.clearRect(0, 0, width, height);
-    ctx.save();
-    ctx.translate(pan.x, pan.y);
-    ctx.scale(zoom, zoom);
-
-    // Calculate node positions based on location groups
+    if (!canvas) return;
+    
+    const width = canvas.width || 800;
+    const height = canvas.height || 600;
+    
+    // Load saved positions from localStorage
+    const savedPositions = localStorage.getItem('topologyPositions');
+    if (savedPositions) {
+      const parsed = JSON.parse(savedPositions);
+      // Check if saved positions match current nodes
+      const savedNodeIds = Object.keys(parsed);
+      const currentNodeIds = topology.nodes.map(n => n.id);
+      const allMatch = currentNodeIds.every(id => savedNodeIds.includes(id));
+      
+      if (allMatch) {
+        setNodePositions(parsed);
+        return;
+      }
+    }
+    
+    // Calculate initial positions based on location groups
     const locationGroups = {};
     topology.nodes.forEach(node => {
       const loc = node.location || 'Unknown';
@@ -114,7 +184,7 @@ export default function TopologyPage() {
 
     const locations = Object.keys(locationGroups);
     const locationSpacing = width / (locations.length + 1);
-    const nodePositions = {};
+    const newPositions = {};
 
     locations.forEach((loc, locIndex) => {
       const nodes = locationGroups[loc];
@@ -122,286 +192,394 @@ export default function TopologyPage() {
       const nodeSpacing = height / (nodes.length + 1);
       
       nodes.forEach((node, nodeIndex) => {
-        nodePositions[node.id] = {
-          x: x + (Math.random() - 0.5) * 50,
+        newPositions[node.id] = {
+          x: x + (Math.random() - 0.5) * 30,
           y: nodeSpacing * (nodeIndex + 1),
-          node
         };
       });
     });
 
-    // Draw links
+    setNodePositions(newPositions);
+    localStorage.setItem('topologyPositions', JSON.stringify(newPositions));
+  }, [topology.nodes]);
+
+  // Draw 3D colorful node
+  const draw3DNode = useCallback((ctx, x, y, node, isSelected, size) => {
+    const colors = getDevice3DColors(node.type, node.status);
+    
+    // Draw shadow
+    ctx.beginPath();
+    ctx.ellipse(x + 4, y + size + 8, size * 0.8, size * 0.3, 0, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.15)';
+    ctx.fill();
+    
+    // Draw glow effect
+    const glowGradient = ctx.createRadialGradient(x, y, 0, x, y, size * 1.5);
+    glowGradient.addColorStop(0, colors.glow);
+    glowGradient.addColorStop(1, 'transparent');
+    ctx.beginPath();
+    ctx.arc(x, y, size * 1.5, 0, Math.PI * 2);
+    ctx.fillStyle = glowGradient;
+    ctx.fill();
+    
+    // Draw main 3D sphere with gradient
+    const sphereGradient = ctx.createRadialGradient(x - size * 0.3, y - size * 0.3, 0, x, y, size);
+    sphereGradient.addColorStop(0, '#ffffff');
+    sphereGradient.addColorStop(0.2, colors.gradient1);
+    sphereGradient.addColorStop(0.7, colors.gradient2);
+    sphereGradient.addColorStop(1, colors.shadow);
+    
+    ctx.beginPath();
+    ctx.arc(x, y, size, 0, Math.PI * 2);
+    ctx.fillStyle = sphereGradient;
+    ctx.fill();
+    
+    // Draw highlight
+    ctx.beginPath();
+    ctx.arc(x - size * 0.25, y - size * 0.25, size * 0.35, 0, Math.PI * 2);
+    const highlightGradient = ctx.createRadialGradient(
+      x - size * 0.25, y - size * 0.25, 0,
+      x - size * 0.25, y - size * 0.25, size * 0.35
+    );
+    highlightGradient.addColorStop(0, 'rgba(255, 255, 255, 0.8)');
+    highlightGradient.addColorStop(1, 'rgba(255, 255, 255, 0)');
+    ctx.fillStyle = highlightGradient;
+    ctx.fill();
+    
+    // Draw selection ring
+    if (isSelected) {
+      ctx.beginPath();
+      ctx.arc(x, y, size + 6, 0, Math.PI * 2);
+      ctx.strokeStyle = '#1e293b';
+      ctx.lineWidth = 3;
+      ctx.stroke();
+      
+      // Animated pulse effect
+      ctx.beginPath();
+      ctx.arc(x, y, size + 10, 0, Math.PI * 2);
+      ctx.strokeStyle = 'rgba(30, 41, 59, 0.3)';
+      ctx.lineWidth = 2;
+      ctx.stroke();
+    }
+    
+    // Draw device type icon inside the sphere
+    ctx.fillStyle = '#ffffff';
+    ctx.strokeStyle = '#ffffff';
+    ctx.lineWidth = 2;
+    
+    const iconSize = size * 0.5;
+    
+    switch (node.type) {
+      case 'router':
+        // Router icon - circle with arrows
+        ctx.beginPath();
+        ctx.arc(x, y, iconSize * 0.6, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(x - iconSize, y);
+        ctx.lineTo(x + iconSize, y);
+        ctx.moveTo(x, y - iconSize);
+        ctx.lineTo(x, y + iconSize);
+        ctx.stroke();
+        break;
+        
+      case 'switch':
+        // Switch icon - rectangle with ports
+        ctx.strokeRect(x - iconSize * 0.8, y - iconSize * 0.4, iconSize * 1.6, iconSize * 0.8);
+        for (let i = 0; i < 4; i++) {
+          ctx.fillRect(x - iconSize * 0.6 + i * iconSize * 0.4, y - iconSize * 0.2, iconSize * 0.15, iconSize * 0.4);
+        }
+        break;
+        
+      case 'firewall':
+        // Firewall icon - wall pattern
+        ctx.strokeRect(x - iconSize * 0.6, y - iconSize * 0.7, iconSize * 1.2, iconSize * 1.4);
+        ctx.beginPath();
+        ctx.moveTo(x - iconSize * 0.6, y - iconSize * 0.2);
+        ctx.lineTo(x + iconSize * 0.6, y - iconSize * 0.2);
+        ctx.moveTo(x - iconSize * 0.6, y + iconSize * 0.3);
+        ctx.lineTo(x + iconSize * 0.6, y + iconSize * 0.3);
+        ctx.moveTo(x, y - iconSize * 0.7);
+        ctx.lineTo(x, y - iconSize * 0.2);
+        ctx.moveTo(x - iconSize * 0.3, y - iconSize * 0.2);
+        ctx.lineTo(x - iconSize * 0.3, y + iconSize * 0.3);
+        ctx.stroke();
+        break;
+        
+      case 'server':
+      case 'virtual_machine':
+        // Server icon - stacked rectangles
+        ctx.strokeRect(x - iconSize * 0.5, y - iconSize * 0.6, iconSize, iconSize * 0.35);
+        ctx.strokeRect(x - iconSize * 0.5, y - iconSize * 0.15, iconSize, iconSize * 0.35);
+        ctx.strokeRect(x - iconSize * 0.5, y + iconSize * 0.3, iconSize, iconSize * 0.35);
+        // LED indicators
+        ctx.fillRect(x + iconSize * 0.25, y - iconSize * 0.5, iconSize * 0.1, iconSize * 0.15);
+        ctx.fillRect(x + iconSize * 0.25, y - iconSize * 0.05, iconSize * 0.1, iconSize * 0.15);
+        ctx.fillRect(x + iconSize * 0.25, y + iconSize * 0.4, iconSize * 0.1, iconSize * 0.15);
+        break;
+        
+      case 'cloud_instance':
+        // Cloud icon
+        ctx.beginPath();
+        ctx.arc(x - iconSize * 0.3, y + iconSize * 0.1, iconSize * 0.4, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.beginPath();
+        ctx.arc(x + iconSize * 0.2, y, iconSize * 0.5, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.beginPath();
+        ctx.arc(x + iconSize * 0.3, y + iconSize * 0.25, iconSize * 0.35, 0, Math.PI * 2);
+        ctx.fill();
+        break;
+        
+      case 'load_balancer':
+        // Load balancer icon - triangle with lines
+        ctx.beginPath();
+        ctx.moveTo(x, y - iconSize * 0.6);
+        ctx.lineTo(x + iconSize * 0.6, y + iconSize * 0.5);
+        ctx.lineTo(x - iconSize * 0.6, y + iconSize * 0.5);
+        ctx.closePath();
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(x - iconSize * 0.3, y);
+        ctx.lineTo(x + iconSize * 0.3, y);
+        ctx.moveTo(x - iconSize * 0.4, y + iconSize * 0.25);
+        ctx.lineTo(x + iconSize * 0.4, y + iconSize * 0.25);
+        ctx.stroke();
+        break;
+        
+      case 'access_point':
+        // Access point icon - antenna with waves
+        ctx.beginPath();
+        ctx.moveTo(x, y + iconSize * 0.5);
+        ctx.lineTo(x, y - iconSize * 0.1);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.arc(x, y + iconSize * 0.5, iconSize * 0.2, 0, Math.PI * 2);
+        ctx.fill();
+        // Waves
+        ctx.beginPath();
+        ctx.arc(x, y - iconSize * 0.2, iconSize * 0.3, Math.PI * 1.2, Math.PI * 1.8);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.arc(x, y - iconSize * 0.2, iconSize * 0.5, Math.PI * 1.15, Math.PI * 1.85);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.arc(x, y - iconSize * 0.2, iconSize * 0.7, Math.PI * 1.1, Math.PI * 1.9);
+        ctx.stroke();
+        break;
+        
+      default:
+        // Default - simple circle
+        ctx.beginPath();
+        ctx.arc(x, y, iconSize * 0.5, 0, Math.PI * 2);
+        ctx.fill();
+    }
+    
+    // Draw status indicator
+    const statusColors = {
+      online: '#22c55e',
+      offline: '#ef4444',
+      degraded: '#f59e0b',
+      maintenance: '#3b82f6',
+    };
+    ctx.beginPath();
+    ctx.arc(x + size * 0.7, y - size * 0.7, 8, 0, Math.PI * 2);
+    ctx.fillStyle = statusColors[node.status] || '#64748b';
+    ctx.fill();
+    ctx.strokeStyle = '#fff';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    
+    // Draw URL indicator if device has a configured URL
+    if (deviceUrls[node.id]) {
+      ctx.beginPath();
+      ctx.arc(x - size * 0.7, y - size * 0.7, 6, 0, Math.PI * 2);
+      ctx.fillStyle = '#3b82f6';
+      ctx.fill();
+      ctx.strokeStyle = '#fff';
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+    }
+  }, [deviceUrls]);
+
+  const drawTopology = useCallback(() => {
+    const canvas = canvasRef.current;
+    if (!canvas || topology.nodes.length === 0 || Object.keys(nodePositions).length === 0) return;
+
+    const ctx = canvas.getContext('2d');
+    const width = canvas.width;
+    const height = canvas.height;
+
+    // Clear canvas
+    ctx.clearRect(0, 0, width, height);
+    ctx.save();
+    ctx.translate(pan.x, pan.y);
+    ctx.scale(zoom, zoom);
+
+    // Draw links with gradient
     topology.links.forEach(link => {
       const source = nodePositions[link.source];
       const target = nodePositions[link.target];
       if (!source || !target) return;
 
+      // Create gradient along the link
+      const gradient = ctx.createLinearGradient(source.x, source.y, target.x, target.y);
+      
+      const linkColors = {
+        core: ['#3b82f6', '#60a5fa'],
+        server: ['#22c55e', '#4ade80'],
+        cloud: ['#f97316', '#fb923c'],
+        wan: ['#8b5cf6', '#a78bfa'],
+        edge: ['#64748b', '#94a3b8']
+      };
+      
+      const colors = linkColors[link.type] || linkColors.edge;
+      gradient.addColorStop(0, colors[0]);
+      gradient.addColorStop(1, colors[1]);
+      
       ctx.beginPath();
       ctx.moveTo(source.x, source.y);
       ctx.lineTo(target.x, target.y);
-      
-      // Different colors for link types
-      const linkColors = {
-        core: '#3b82f6',
-        server: '#22c55e',
-        cloud: '#f97316',
-        wan: '#8b5cf6',
-        edge: '#64748b'
-      };
-      ctx.strokeStyle = linkColors[link.type] || '#94a3b8';
-      ctx.lineWidth = link.type === 'wan' ? 3 : 2;
+      ctx.strokeStyle = gradient;
+      ctx.lineWidth = link.type === 'wan' ? 4 : 3;
       
       if (link.type === 'wan') {
-        ctx.setLineDash([5, 5]);
+        ctx.setLineDash([8, 4]);
       } else {
         ctx.setLineDash([]);
       }
       ctx.stroke();
+      ctx.setLineDash([]);
     });
 
-    // Draw nodes with Cisco-style icons
-    Object.values(nodePositions).forEach(({ x, y, node }) => {
-      const color = getDeviceColor(node.type, node.status);
+    // Draw nodes with 3D effect
+    topology.nodes.forEach(node => {
+      const pos = nodePositions[node.id];
+      if (!pos) return;
+      
       const isSelected = selectedNode?.id === node.id;
-      const size = isSelected ? 32 : 28;
+      const size = isSelected ? 34 : 28;
       
-      // Draw background circle
-      ctx.beginPath();
-      ctx.arc(x, y, size, 0, Math.PI * 2);
-      ctx.fillStyle = '#fff';
-      ctx.fill();
-      ctx.strokeStyle = color;
-      ctx.lineWidth = 3;
-      ctx.stroke();
+      draw3DNode(ctx, pos.x, pos.y, node, isSelected, size);
       
-      if (isSelected) {
-        ctx.strokeStyle = '#1e293b';
-        ctx.lineWidth = 4;
-        ctx.stroke();
-      }
-
-      // Draw Cisco-style icon based on device type
-      ctx.fillStyle = color;
-      ctx.strokeStyle = color;
-      ctx.lineWidth = 2;
-      
-      const drawRouter = () => {
-        // Cisco router icon - circle with arrows
-        ctx.beginPath();
-        ctx.arc(x, y, size * 0.5, 0, Math.PI * 2);
-        ctx.stroke();
-        // Cross arrows
-        ctx.beginPath();
-        ctx.moveTo(x - size * 0.6, y);
-        ctx.lineTo(x + size * 0.6, y);
-        ctx.moveTo(x, y - size * 0.6);
-        ctx.lineTo(x, y + size * 0.6);
-        ctx.stroke();
-        // Arrow heads
-        ctx.beginPath();
-        ctx.moveTo(x + size * 0.4, y - 4);
-        ctx.lineTo(x + size * 0.6, y);
-        ctx.lineTo(x + size * 0.4, y + 4);
-        ctx.fill();
-      };
-      
-      const drawSwitch = () => {
-        // Cisco switch icon - rectangle with arrows
-        ctx.strokeRect(x - size * 0.5, y - size * 0.3, size, size * 0.6);
-        ctx.beginPath();
-        ctx.moveTo(x - size * 0.7, y);
-        ctx.lineTo(x - size * 0.3, y);
-        ctx.moveTo(x + size * 0.3, y);
-        ctx.lineTo(x + size * 0.7, y);
-        ctx.stroke();
-        // Arrows
-        ctx.beginPath();
-        ctx.moveTo(x - size * 0.5, y - 4);
-        ctx.lineTo(x - size * 0.3, y);
-        ctx.lineTo(x - size * 0.5, y + 4);
-        ctx.moveTo(x + size * 0.5, y - 4);
-        ctx.lineTo(x + size * 0.7, y);
-        ctx.lineTo(x + size * 0.5, y + 4);
-        ctx.fill();
-      };
-      
-      const drawFirewall = () => {
-        // Cisco firewall icon - wall with bricks
-        ctx.strokeRect(x - size * 0.4, y - size * 0.5, size * 0.8, size);
-        // Brick lines
-        ctx.beginPath();
-        ctx.moveTo(x - size * 0.4, y - size * 0.17);
-        ctx.lineTo(x + size * 0.4, y - size * 0.17);
-        ctx.moveTo(x - size * 0.4, y + size * 0.17);
-        ctx.lineTo(x + size * 0.4, y + size * 0.17);
-        ctx.moveTo(x, y - size * 0.5);
-        ctx.lineTo(x, y - size * 0.17);
-        ctx.moveTo(x - size * 0.2, y - size * 0.17);
-        ctx.lineTo(x - size * 0.2, y + size * 0.17);
-        ctx.moveTo(x + size * 0.2, y - size * 0.17);
-        ctx.lineTo(x + size * 0.2, y + size * 0.17);
-        ctx.moveTo(x, y + size * 0.17);
-        ctx.lineTo(x, y + size * 0.5);
-        ctx.stroke();
-      };
-      
-      const drawServer = () => {
-        // Cisco server/host icon - rectangle with lines
-        ctx.strokeRect(x - size * 0.35, y - size * 0.45, size * 0.7, size * 0.9);
-        ctx.beginPath();
-        ctx.moveTo(x - size * 0.35, y - size * 0.15);
-        ctx.lineTo(x + size * 0.35, y - size * 0.15);
-        ctx.moveTo(x - size * 0.35, y + size * 0.15);
-        ctx.lineTo(x + size * 0.35, y + size * 0.15);
-        ctx.stroke();
-        // Server indicators
-        ctx.fillRect(x - size * 0.2, y - size * 0.35, size * 0.1, size * 0.1);
-        ctx.fillRect(x - size * 0.2, y - size * 0.05, size * 0.1, size * 0.1);
-        ctx.fillRect(x - size * 0.2, y + size * 0.25, size * 0.1, size * 0.1);
-      };
-      
-      const drawCloud = () => {
-        // Cloud icon
-        ctx.beginPath();
-        ctx.arc(x - size * 0.2, y, size * 0.3, 0, Math.PI * 2);
-        ctx.arc(x + size * 0.15, y - size * 0.1, size * 0.35, 0, Math.PI * 2);
-        ctx.arc(x + size * 0.2, y + size * 0.15, size * 0.25, 0, Math.PI * 2);
-        ctx.fill();
-      };
-      
-      const drawLoadBalancer = () => {
-        // Load balancer - triangle pointing down with horizontal lines
-        ctx.beginPath();
-        ctx.moveTo(x, y - size * 0.4);
-        ctx.lineTo(x + size * 0.4, y + size * 0.3);
-        ctx.lineTo(x - size * 0.4, y + size * 0.3);
-        ctx.closePath();
-        ctx.stroke();
-        // Balance lines
-        ctx.beginPath();
-        ctx.moveTo(x - size * 0.2, y);
-        ctx.lineTo(x + size * 0.2, y);
-        ctx.moveTo(x - size * 0.3, y + size * 0.15);
-        ctx.lineTo(x + size * 0.3, y + size * 0.15);
-        ctx.stroke();
-      };
-      
-      const drawAccessPoint = () => {
-        // Wireless AP icon - antenna with waves
-        ctx.beginPath();
-        ctx.moveTo(x, y + size * 0.4);
-        ctx.lineTo(x, y - size * 0.1);
-        ctx.stroke();
-        ctx.beginPath();
-        ctx.arc(x, y + size * 0.4, size * 0.15, 0, Math.PI * 2);
-        ctx.fill();
-        // Waves
-        ctx.beginPath();
-        ctx.arc(x, y - size * 0.2, size * 0.2, Math.PI * 1.3, Math.PI * 1.7);
-        ctx.stroke();
-        ctx.beginPath();
-        ctx.arc(x, y - size * 0.2, size * 0.35, Math.PI * 1.25, Math.PI * 1.75);
-        ctx.stroke();
-        ctx.beginPath();
-        ctx.arc(x, y - size * 0.2, size * 0.5, Math.PI * 1.2, Math.PI * 1.8);
-        ctx.stroke();
-      };
-
-      // Draw icon based on type
-      switch (node.type) {
-        case 'router':
-          drawRouter();
-          break;
-        case 'switch':
-          drawSwitch();
-          break;
-        case 'firewall':
-          drawFirewall();
-          break;
-        case 'server':
-        case 'virtual_machine':
-          drawServer();
-          break;
-        case 'cloud_instance':
-          drawCloud();
-          break;
-        case 'load_balancer':
-          drawLoadBalancer();
-          break;
-        case 'access_point':
-          drawAccessPoint();
-          break;
-        default:
-          // Default circle
-          ctx.beginPath();
-          ctx.arc(x, y, size * 0.4, 0, Math.PI * 2);
-          ctx.fill();
-      }
-
-      // Draw status indicator
-      const statusColors = {
-        online: '#22c55e',
-        offline: '#ef4444',
-        degraded: '#f59e0b',
-        maintenance: '#3b82f6',
-      };
-      ctx.beginPath();
-      ctx.arc(x + 16, y - 16, 6, 0, Math.PI * 2);
-      ctx.fillStyle = statusColors[node.status] || '#64748b';
-      ctx.fill();
-      ctx.strokeStyle = '#fff';
-      ctx.lineWidth = 2;
-      ctx.stroke();
-
-      // Draw node label
-      ctx.fillStyle = '#1e293b';
-      ctx.font = '11px Public Sans, sans-serif';
+      // Draw node label with background
+      const labelY = pos.y + size + 18;
+      ctx.font = 'bold 11px Inter, sans-serif';
       ctx.textAlign = 'center';
-      ctx.fillText(node.name, x, y + 40);
       
-      // Draw IP
+      // Label background
+      const labelWidth = ctx.measureText(node.name).width + 12;
+      ctx.fillStyle = 'rgba(255, 255, 255, 0.9)';
+      ctx.roundRect(pos.x - labelWidth / 2, labelY - 10, labelWidth, 16, 4);
+      ctx.fill();
+      
+      // Label text
+      ctx.fillStyle = '#1e293b';
+      ctx.fillText(node.name, pos.x, labelY);
+      
+      // Draw IP below label
       ctx.fillStyle = '#64748b';
       ctx.font = '9px JetBrains Mono, monospace';
-      ctx.fillText(node.ip, x, y + 52);
+      ctx.fillText(node.ip, pos.x, labelY + 14);
     });
 
-    // Store positions for click detection
-    canvas.nodePositions = nodePositions;
-
     ctx.restore();
-  }, [topology, selectedNode, zoom, pan]);
+  }, [topology, selectedNode, zoom, pan, nodePositions, draw3DNode]);
 
   useEffect(() => {
     drawTopology();
   }, [drawTopology]);
 
-  useEffect(() => {
+  // Mouse event handlers
+  const getCanvasCoords = useCallback((e) => {
     const canvas = canvasRef.current;
-    if (!canvas) return;
-
-    const handleClick = (e) => {
-      const rect = canvas.getBoundingClientRect();
-      const x = (e.clientX - rect.left - pan.x) / zoom;
-      const y = (e.clientY - rect.top - pan.y) / zoom;
-
-      if (canvas.nodePositions) {
-        for (const pos of Object.values(canvas.nodePositions)) {
-          const dx = x - pos.x;
-          const dy = y - pos.y;
-          if (Math.sqrt(dx * dx + dy * dy) < 24) {
-            setSelectedNode(pos.node);
-            return;
-          }
-        }
-      }
-      setSelectedNode(null);
+    const rect = canvas.getBoundingClientRect();
+    return {
+      x: (e.clientX - rect.left - pan.x) / zoom,
+      y: (e.clientY - rect.top - pan.y) / zoom
     };
-
-    canvas.addEventListener('click', handleClick);
-    return () => canvas.removeEventListener('click', handleClick);
   }, [zoom, pan]);
 
-  // Handle canvas resize
+  const findNodeAtPosition = useCallback((x, y) => {
+    for (const node of topology.nodes) {
+      const pos = nodePositions[node.id];
+      if (!pos) continue;
+      const dx = x - pos.x;
+      const dy = y - pos.y;
+      if (Math.sqrt(dx * dx + dy * dy) < 35) {
+        return node;
+      }
+    }
+    return null;
+  }, [topology.nodes, nodePositions]);
+
+  const handleMouseDown = useCallback((e) => {
+    const coords = getCanvasCoords(e);
+    const node = findNodeAtPosition(coords.x, coords.y);
+    
+    if (node && !isLocked) {
+      setDraggedNode(node);
+      setIsDragging(true);
+      setSelectedNode(node);
+    } else if (!node) {
+      // Start panning
+      setIsPanning(true);
+      setLastPanPoint({ x: e.clientX, y: e.clientY });
+    }
+  }, [getCanvasCoords, findNodeAtPosition, isLocked]);
+
+  const handleMouseMove = useCallback((e) => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    
+    if (isDragging && draggedNode && !isLocked) {
+      const coords = getCanvasCoords(e);
+      setNodePositions(prev => {
+        const newPositions = {
+          ...prev,
+          [draggedNode.id]: { x: coords.x, y: coords.y }
+        };
+        localStorage.setItem('topologyPositions', JSON.stringify(newPositions));
+        return newPositions;
+      });
+    } else if (isPanning) {
+      const dx = e.clientX - lastPanPoint.x;
+      const dy = e.clientY - lastPanPoint.y;
+      setPan(prev => ({ x: prev.x + dx, y: prev.y + dy }));
+      setLastPanPoint({ x: e.clientX, y: e.clientY });
+    } else {
+      // Update cursor
+      const coords = getCanvasCoords(e);
+      const node = findNodeAtPosition(coords.x, coords.y);
+      canvas.style.cursor = node && !isLocked ? 'grab' : 'default';
+    }
+  }, [isDragging, draggedNode, isPanning, lastPanPoint, isLocked, getCanvasCoords, findNodeAtPosition]);
+
+  const handleMouseUp = useCallback(() => {
+    if (isDragging) {
+      setIsDragging(false);
+      setDraggedNode(null);
+    }
+    setIsPanning(false);
+  }, [isDragging]);
+
+  const handleDoubleClick = useCallback((e) => {
+    const coords = getCanvasCoords(e);
+    const node = findNodeAtPosition(coords.x, coords.y);
+    
+    if (node) {
+      const url = deviceUrls[node.id];
+      if (url) {
+        window.open(url, '_blank');
+      } else {
+        setSelectedNode(node);
+        setEditingDeviceUrl(deviceUrls[node.id] || `https://${node.ip}/`);
+        setConfigDialogOpen(true);
+      }
+    }
+  }, [getCanvasCoords, findNodeAtPosition, deviceUrls]);
+
+  // Canvas resize handler
   useEffect(() => {
     const handleResize = () => {
       const canvas = canvasRef.current;
@@ -417,8 +595,51 @@ export default function TopologyPage() {
     return () => window.removeEventListener('resize', handleResize);
   }, [drawTopology]);
 
+  // Attach event listeners
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    canvas.addEventListener('mousedown', handleMouseDown);
+    canvas.addEventListener('mousemove', handleMouseMove);
+    canvas.addEventListener('mouseup', handleMouseUp);
+    canvas.addEventListener('mouseleave', handleMouseUp);
+    canvas.addEventListener('dblclick', handleDoubleClick);
+
+    return () => {
+      canvas.removeEventListener('mousedown', handleMouseDown);
+      canvas.removeEventListener('mousemove', handleMouseMove);
+      canvas.removeEventListener('mouseup', handleMouseUp);
+      canvas.removeEventListener('mouseleave', handleMouseUp);
+      canvas.removeEventListener('dblclick', handleDoubleClick);
+    };
+  }, [handleMouseDown, handleMouseMove, handleMouseUp, handleDoubleClick]);
+
   const handleZoomIn = () => setZoom(z => Math.min(z + 0.2, 2));
   const handleZoomOut = () => setZoom(z => Math.max(z - 0.2, 0.5));
+  const handleResetView = () => {
+    setZoom(1);
+    setPan({ x: 0, y: 0 });
+  };
+
+  const handleSaveDeviceUrl = () => {
+    if (selectedNode) {
+      const newUrls = {
+        ...deviceUrls,
+        [selectedNode.id]: editingDeviceUrl
+      };
+      setDeviceUrls(newUrls);
+      localStorage.setItem('deviceUrls', JSON.stringify(newUrls));
+      toast.success(`URL saved for ${selectedNode.name}`);
+      setConfigDialogOpen(false);
+    }
+  };
+
+  const handleOpenDeviceUrl = () => {
+    if (selectedNode && deviceUrls[selectedNode.id]) {
+      window.open(deviceUrls[selectedNode.id], '_blank');
+    }
+  };
 
   const deviceStats = {
     total: topology.nodes.length,
@@ -433,14 +654,25 @@ export default function TopologyPage() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-3xl font-bold tracking-tight font-['Manrope']">Network Topology</h1>
-          <p className="text-muted-foreground mt-1">Visual representation of network infrastructure</p>
+          <p className="text-muted-foreground mt-1">Interactive network visualization - drag nodes to rearrange</p>
         </div>
         <div className="flex gap-2">
+          <Button 
+            variant={isLocked ? "default" : "outline"} 
+            size="icon" 
+            onClick={() => setIsLocked(!isLocked)}
+            title={isLocked ? "Unlock editing" : "Lock editing"}
+          >
+            {isLocked ? <Lock className="h-4 w-4" /> : <Unlock className="h-4 w-4" />}
+          </Button>
           <Button variant="outline" size="icon" onClick={handleZoomOut} data-testid="zoom-out">
             <ZoomOut className="h-4 w-4" />
           </Button>
           <Button variant="outline" size="icon" onClick={handleZoomIn} data-testid="zoom-in">
             <ZoomIn className="h-4 w-4" />
+          </Button>
+          <Button variant="outline" size="icon" onClick={handleResetView} title="Reset view">
+            <Move className="h-4 w-4" />
           </Button>
           <Button variant="outline" onClick={fetchTopology} data-testid="refresh-topology">
             <RefreshCw className="h-4 w-4 mr-2" />
@@ -500,8 +732,11 @@ export default function TopologyPage() {
       {/* Topology Canvas */}
       <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
         <Card className="lg:col-span-3 bg-white border-border/50">
-          <CardHeader>
+          <CardHeader className="flex flex-row items-center justify-between">
             <CardTitle className="text-lg font-semibold">Network Map</CardTitle>
+            <div className="text-sm text-muted-foreground">
+              {isLocked ? '🔒 Locked' : '🔓 Drag nodes to rearrange • Double-click to open device URL'}
+            </div>
           </CardHeader>
           <CardContent>
             {loading ? (
@@ -509,11 +744,11 @@ export default function TopologyPage() {
                 <RefreshCw className="h-8 w-8 animate-spin text-muted-foreground" />
               </div>
             ) : (
-              <div className="relative bg-slate-50 rounded-lg overflow-hidden">
+              <div className="relative bg-gradient-to-br from-slate-50 to-slate-100 rounded-lg overflow-hidden border">
                 <canvas 
                   ref={canvasRef} 
-                  className="w-full cursor-pointer"
-                  style={{ height: '600px' }}
+                  className="w-full"
+                  style={{ height: '600px', cursor: isDragging ? 'grabbing' : 'default' }}
                 />
               </div>
             )}
@@ -528,24 +763,32 @@ export default function TopologyPage() {
             </CardHeader>
             <CardContent className="space-y-3">
               <div className="flex items-center gap-2">
-                <div className="w-4 h-4 rounded-full bg-[#3b82f6]" />
+                <div className="w-5 h-5 rounded-full bg-gradient-to-br from-blue-400 to-blue-600 shadow-md" />
                 <span className="text-sm">Router</span>
               </div>
               <div className="flex items-center gap-2">
-                <div className="w-4 h-4 rounded-full bg-[#8b5cf6]" />
+                <div className="w-5 h-5 rounded-full bg-gradient-to-br from-purple-400 to-purple-600 shadow-md" />
                 <span className="text-sm">Switch</span>
               </div>
               <div className="flex items-center gap-2">
-                <div className="w-4 h-4 rounded-full bg-[#ef4444]" />
+                <div className="w-5 h-5 rounded-full bg-gradient-to-br from-red-400 to-red-600 shadow-md" />
                 <span className="text-sm">Firewall</span>
               </div>
               <div className="flex items-center gap-2">
-                <div className="w-4 h-4 rounded-full bg-[#22c55e]" />
+                <div className="w-5 h-5 rounded-full bg-gradient-to-br from-green-400 to-green-600 shadow-md" />
                 <span className="text-sm">Server</span>
               </div>
               <div className="flex items-center gap-2">
-                <div className="w-4 h-4 rounded-full bg-[#f97316]" />
+                <div className="w-5 h-5 rounded-full bg-gradient-to-br from-orange-400 to-orange-600 shadow-md" />
                 <span className="text-sm">Cloud Instance</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <div className="w-5 h-5 rounded-full bg-gradient-to-br from-cyan-400 to-cyan-600 shadow-md" />
+                <span className="text-sm">Load Balancer</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <div className="w-5 h-5 rounded-full bg-gradient-to-br from-indigo-400 to-indigo-600 shadow-md" />
+                <span className="text-sm">Access Point</span>
               </div>
               <div className="border-t pt-3 mt-3">
                 <p className="text-xs text-muted-foreground mb-2">Status Indicators</p>
@@ -567,8 +810,18 @@ export default function TopologyPage() {
 
           {selectedNode && (
             <Card className="bg-white border-border/50">
-              <CardHeader>
+              <CardHeader className="flex flex-row items-center justify-between pb-2">
                 <CardTitle className="text-lg font-semibold">Selected Device</CardTitle>
+                <Button 
+                  variant="ghost" 
+                  size="icon"
+                  onClick={() => {
+                    setEditingDeviceUrl(deviceUrls[selectedNode.id] || `https://${selectedNode.ip}/`);
+                    setConfigDialogOpen(true);
+                  }}
+                >
+                  <Settings className="h-4 w-4" />
+                </Button>
               </CardHeader>
               <CardContent className="space-y-3">
                 <div className="flex items-center gap-2">
@@ -581,11 +834,58 @@ export default function TopologyPage() {
                   <p><span className="text-muted-foreground">Location:</span> {selectedNode.location}</p>
                   <p><span className="text-muted-foreground">Status:</span> <Badge variant="outline" className="capitalize">{selectedNode.status}</Badge></p>
                 </div>
+                {deviceUrls[selectedNode.id] && (
+                  <Button 
+                    variant="outline" 
+                    size="sm" 
+                    className="w-full mt-2"
+                    onClick={handleOpenDeviceUrl}
+                  >
+                    <ExternalLink className="h-4 w-4 mr-2" />
+                    Open Device Config
+                  </Button>
+                )}
               </CardContent>
             </Card>
           )}
         </div>
       </div>
+
+      {/* Device URL Configuration Dialog */}
+      <Dialog open={configDialogOpen} onOpenChange={setConfigDialogOpen}>
+        <DialogContent className="sm:max-w-[500px]">
+          <DialogHeader>
+            <DialogTitle>Configure Device URL</DialogTitle>
+          </DialogHeader>
+          {selectedNode && (
+            <div className="space-y-4 py-4">
+              <div className="flex items-center gap-3 p-3 bg-muted rounded-lg">
+                <StatusBadge status={selectedNode.status} />
+                <div>
+                  <p className="font-medium">{selectedNode.name}</p>
+                  <p className="text-sm text-muted-foreground">{selectedNode.ip}</p>
+                </div>
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="device-url">Configuration URL</Label>
+                <Input
+                  id="device-url"
+                  value={editingDeviceUrl}
+                  onChange={(e) => setEditingDeviceUrl(e.target.value)}
+                  placeholder="https://device-ip/config"
+                />
+                <p className="text-xs text-muted-foreground">
+                  Enter the URL to the device's configuration page. Double-click the device on the map to open this URL.
+                </p>
+              </div>
+            </div>
+          )}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setConfigDialogOpen(false)}>Cancel</Button>
+            <Button onClick={handleSaveDeviceUrl}>Save URL</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

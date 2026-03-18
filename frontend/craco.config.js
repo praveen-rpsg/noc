@@ -77,6 +77,25 @@ webpackConfig.devServer = (devServerConfig) => {
       return middlewares;
     };
   }
+  
+  // Configure the dev server client to suppress ResizeObserver errors
+  devServerConfig.client = {
+    ...devServerConfig.client,
+    overlay: {
+      errors: true,
+      warnings: false,
+      runtimeErrors: (error) => {
+        // Suppress ResizeObserver loop errors - these are benign
+        if (error.message && (
+          error.message.includes('ResizeObserver loop completed with undelivered notifications') ||
+          error.message.includes('ResizeObserver loop limit exceeded')
+        )) {
+          return false;
+        }
+        return true;
+      },
+    },
+  };
 
   return devServerConfig;
 };
