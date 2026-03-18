@@ -754,9 +754,16 @@ async def analyze_with_ai(request: AIAnalysisRequest, current_user: dict = Depen
     analysis = await get_ai_analysis(request.context, request.query)
     return {"analysis": analysis}
 
+class TracerouteRequest(BaseModel):
+    target: str
+    traceroute_output: str
+
+class LogAnalysisRequest(BaseModel):
+    logs: str
+
 @ai_router.post("/traceroute-analysis")
-async def analyze_traceroute(target: str, traceroute_output: str, current_user: dict = Depends(get_current_user)):
-    context = f"Traceroute to {target}:\n{traceroute_output}"
+async def analyze_traceroute(request: TracerouteRequest, current_user: dict = Depends(get_current_user)):
+    context = f"Traceroute to {request.target}:\n{request.traceroute_output}"
     analysis = await get_ai_analysis(
         context,
         "Analyze this traceroute output. Identify where the connection might be dropping or experiencing high latency. Provide recommendations."
@@ -764,9 +771,9 @@ async def analyze_traceroute(target: str, traceroute_output: str, current_user: 
     return {"analysis": analysis}
 
 @ai_router.post("/log-analysis")
-async def analyze_logs(logs: str, current_user: dict = Depends(get_current_user)):
+async def analyze_logs(request: LogAnalysisRequest, current_user: dict = Depends(get_current_user)):
     analysis = await get_ai_analysis(
-        logs,
+        request.logs,
         "Analyze these logs for errors, warnings, and anomalies. Identify patterns and provide recommendations."
     )
     return {"analysis": analysis}
