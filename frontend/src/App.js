@@ -18,6 +18,8 @@ import SSHTerminalPage from "./pages/SSHTerminalPage";
 import ReportsPage from "./pages/ReportsPage";
 import ConfigurationPage from "./pages/ConfigurationPage";
 import SLAPage from "./pages/SLAPage";
+import AgentsPage from "./pages/AgentsPage";
+import EscalationPage from "./pages/EscalationPage";
 
 const ProtectedRoute = ({ children }) => {
   const { user, loading } = useAuth();
@@ -151,6 +153,22 @@ function AppRoutes() {
         element={
           <ProtectedRoute>
             <SLAPage />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/agents"
+        element={
+          <ProtectedRoute>
+            <AgentsPage />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/escalation"
+        element={
+          <ProtectedRoute>
+            <EscalationPage />
           </ProtectedRoute>
         }
       />

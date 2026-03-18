@@ -17,6 +17,15 @@ from enum import Enum
 import json
 import paramiko
 import io
+import telnetlib3
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
+
+from agents import (
+    generate_activation_codes, Agent, AgentCreate, AgentUpdate,
+    ActivationCode, EscalationContact, EscalationContactCreate, ESCALATION_LEVELS
+)
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -33,6 +42,13 @@ ACCESS_TOKEN_EXPIRE_MINUTES = int(os.environ.get('ACCESS_TOKEN_EXPIRE_MINUTES', 
 
 # Emergent LLM Key
 EMERGENT_LLM_KEY = os.environ.get('EMERGENT_LLM_KEY', '')
+
+# Office 365 SMTP Configuration
+SMTP_SERVER = os.environ.get('SMTP_SERVER', 'smtp.office365.com')
+SMTP_PORT = int(os.environ.get('SMTP_PORT', 587))
+SMTP_USERNAME = os.environ.get('SMTP_USERNAME', '')
+SMTP_PASSWORD = os.environ.get('SMTP_PASSWORD', '')
+EMAIL_FROM = os.environ.get('EMAIL_FROM', 'noc@atech.com')
 
 # Create the main app
 app = FastAPI(title="ATECH NOC Commander API", version="2.0.0")
@@ -78,6 +94,10 @@ dashboard_router = APIRouter(prefix="/dashboard", tags=["Dashboard"])
 topology_router = APIRouter(prefix="/topology", tags=["Topology"])
 ssh_router = APIRouter(prefix="/ssh", tags=["SSH"])
 notifications_router = APIRouter(prefix="/notifications", tags=["Notifications"])
+agents_router = APIRouter(prefix="/agents", tags=["Agents"])
+snmp_router = APIRouter(prefix="/snmp", tags=["SNMP"])
+telnet_router = APIRouter(prefix="/telnet", tags=["Telnet"])
+escalation_router = APIRouter(prefix="/escalation", tags=["Escalation"])
 
 security = HTTPBearer()
 
@@ -1237,6 +1257,403 @@ async def send_notification(title: str, message: str, severity: str, incident_id
     
     return notification
 
+# ===================== AGENT ROUTES =====================
+@agents_router.get("")
+async def get_agents(current_user: dict = Depends(get_current_user)):
+    """Get all agents"""
+    agents = await db.agents.find({}, {"_id": 0}).to_list(100)
+    return agents
+
+@agents_router.get("/{agent_id}")
+async def get_agent(agent_id: str, current_user: dict = Depends(get_current_user)):
+    """Get agent by ID"""
+    agent = await db.agents.find_one({"id": agent_id}, {"_id": 0})
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    return agent
+
+@agents_router.post("")
+async def create_agent(agent_data: AgentCreate, current_user: dict = Depends(get_current_user)):
+    """Create a new agent with activation code"""
+    # Verify activation code
+    activation = await db.activation_codes.find_one({"code": agent_data.activation_code, "status": "available"})
+    if not activation:
+        raise HTTPException(status_code=400, detail="Invalid or already used activation code")
+    
+    # Create agent
+    agent = Agent(
+        name=agent_data.name,
+        description=agent_data.description,
+        activation_code=agent_data.activation_code,
+        created_by=current_user["name"]
+    )
+    
+    agent_dict = agent.model_dump()
+    agent_dict["created_at"] = agent_dict["created_at"].isoformat()
+    agent_dict["updated_at"] = agent_dict["updated_at"].isoformat()
+    await db.agents.insert_one(agent_dict)
+    
+    # Mark activation code as used
+    await db.activation_codes.update_one(
+        {"code": agent_data.activation_code},
+        {"$set": {
+            "status": "activated",
+            "activated_at": datetime.now(timezone.utc).isoformat(),
+            "activated_by": current_user["name"],
+            "agent_id": agent.id
+        }}
+    )
+    
+    return agent
+
+@agents_router.put("/{agent_id}")
+async def update_agent(agent_id: str, agent_data: AgentUpdate, current_user: dict = Depends(get_current_user)):
+    """Update agent"""
+    agent = await db.agents.find_one({"id": agent_id})
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    
+    update_data = {k: v for k, v in agent_data.model_dump().items() if v is not None}
+    update_data["updated_at"] = datetime.now(timezone.utc).isoformat()
+    
+    await db.agents.update_one({"id": agent_id}, {"$set": update_data})
+    updated = await db.agents.find_one({"id": agent_id}, {"_id": 0})
+    return updated
+
+@agents_router.post("/{agent_id}/assign-device/{device_id}")
+async def assign_device_to_agent(agent_id: str, device_id: str, current_user: dict = Depends(get_current_user)):
+    """Assign a device to an agent"""
+    agent = await db.agents.find_one({"id": agent_id})
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    
+    device = await db.devices.find_one({"id": device_id})
+    if not device:
+        raise HTTPException(status_code=404, detail="Device not found")
+    
+    assigned_devices = agent.get("assigned_devices", [])
+    if len(assigned_devices) >= 15:
+        raise HTTPException(status_code=400, detail="Agent has reached maximum device limit (15). Please activate a new agent.")
+    
+    if device_id in assigned_devices:
+        raise HTTPException(status_code=400, detail="Device already assigned to this agent")
+    
+    assigned_devices.append(device_id)
+    await db.agents.update_one(
+        {"id": agent_id},
+        {"$set": {"assigned_devices": assigned_devices, "updated_at": datetime.now(timezone.utc).isoformat()}}
+    )
+    
+    # Update device with agent reference
+    await db.devices.update_one({"id": device_id}, {"$set": {"agent_id": agent_id}})
+    
+    return {"message": f"Device {device['name']} assigned to agent {agent['name']}", "total_devices": len(assigned_devices)}
+
+@agents_router.post("/{agent_id}/unassign-device/{device_id}")
+async def unassign_device_from_agent(agent_id: str, device_id: str, current_user: dict = Depends(get_current_user)):
+    """Unassign a device from an agent"""
+    agent = await db.agents.find_one({"id": agent_id})
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    
+    assigned_devices = agent.get("assigned_devices", [])
+    if device_id not in assigned_devices:
+        raise HTTPException(status_code=400, detail="Device not assigned to this agent")
+    
+    assigned_devices.remove(device_id)
+    await db.agents.update_one(
+        {"id": agent_id},
+        {"$set": {"assigned_devices": assigned_devices, "updated_at": datetime.now(timezone.utc).isoformat()}}
+    )
+    
+    await db.devices.update_one({"id": device_id}, {"$unset": {"agent_id": ""}})
+    
+    return {"message": "Device unassigned", "total_devices": len(assigned_devices)}
+
+# ===================== ACTIVATION CODE ROUTES =====================
+@api_router.get("/activation-codes")
+async def get_activation_codes(status: Optional[str] = None, current_user: dict = Depends(get_current_user)):
+    """Get activation codes"""
+    query = {}
+    if status:
+        query["status"] = status
+    codes = await db.activation_codes.find(query, {"_id": 0}).to_list(1000)
+    return codes
+
+@api_router.post("/activation-codes/generate")
+async def generate_codes(count: int = 200, current_user: dict = Depends(get_current_user)):
+    """Generate new activation codes"""
+    if current_user.get("role") not in ["admin", "manager"]:
+        raise HTTPException(status_code=403, detail="Only admins can generate activation codes")
+    
+    codes = generate_activation_codes(count)
+    await db.activation_codes.insert_many(codes)
+    
+    return {"message": f"Generated {count} activation codes", "codes": [c["code"] for c in codes]}
+
+@api_router.post("/activation-codes/verify")
+async def verify_activation_code(code: str):
+    """Verify if an activation code is valid"""
+    activation = await db.activation_codes.find_one({"code": code}, {"_id": 0})
+    if not activation:
+        return {"valid": False, "message": "Invalid activation code"}
+    if activation["status"] != "available":
+        return {"valid": False, "message": f"Activation code already {activation['status']}"}
+    return {"valid": True, "message": "Activation code is valid"}
+
+# ===================== SNMP ROUTES =====================
+class SNMPDiscoveryRequest(BaseModel):
+    ip_range: str  # e.g., "192.168.1.0/24" or "192.168.1.1-192.168.1.50"
+    community: str = "public"
+    port: int = 161
+    timeout: int = 2
+
+class SNMPPollRequest(BaseModel):
+    ip_address: str
+    community: str = "public"
+    oids: List[str] = ["1.3.6.1.2.1.1.1.0", "1.3.6.1.2.1.1.5.0"]  # sysDescr, sysName
+
+@snmp_router.post("/discover")
+async def snmp_discover(request: SNMPDiscoveryRequest, current_user: dict = Depends(get_current_user)):
+    """Discover devices via SNMP (simulated for demo)"""
+    # In production, this would perform actual SNMP discovery
+    # For demo purposes, we simulate discovery
+    discovered = []
+    
+    # Simulate discovered devices
+    demo_devices = [
+        {"ip": "192.168.1.1", "name": "Gateway-Router", "type": "router", "vendor": "Cisco"},
+        {"ip": "192.168.1.2", "name": "Core-Switch-1", "type": "switch", "vendor": "Cisco"},
+        {"ip": "192.168.1.10", "name": "File-Server", "type": "server", "vendor": "Dell"},
+    ]
+    
+    for device in demo_devices:
+        discovered.append({
+            "ip_address": device["ip"],
+            "name": device["name"],
+            "type": device["type"],
+            "vendor": device["vendor"],
+            "snmp_reachable": True,
+            "community": request.community
+        })
+    
+    return {"discovered_count": len(discovered), "devices": discovered}
+
+@snmp_router.post("/poll")
+async def snmp_poll(request: SNMPPollRequest, current_user: dict = Depends(get_current_user)):
+    """Poll device via SNMP (simulated for demo)"""
+    # Simulated SNMP poll response
+    return {
+        "ip_address": request.ip_address,
+        "community": request.community,
+        "results": {
+            "1.3.6.1.2.1.1.1.0": "Cisco IOS Software, Version 15.1(4)M4",
+            "1.3.6.1.2.1.1.5.0": "Core-Router-01",
+            "1.3.6.1.2.1.1.3.0": "4532112",  # sysUpTime
+        }
+    }
+
+@snmp_router.post("/add-discovered")
+async def add_discovered_device(device_data: dict, current_user: dict = Depends(get_current_user)):
+    """Add a discovered SNMP device"""
+    device = Device(
+        name=device_data.get("name", "Unknown"),
+        type=DeviceType(device_data.get("type", "server")),
+        ip_address=device_data.get("ip_address"),
+        location=device_data.get("location", "Discovered"),
+        vendor=device_data.get("vendor"),
+        tags=["snmp-discovered"]
+    )
+    
+    device_dict = device.model_dump()
+    device_dict["created_at"] = device_dict["created_at"].isoformat()
+    device_dict["last_seen"] = device_dict["last_seen"].isoformat()
+    await db.devices.insert_one(device_dict)
+    
+    return device
+
+# ===================== TELNET ROUTES =====================
+class TelnetRequest(BaseModel):
+    device_id: str
+    username: str
+    password: str
+    command: Optional[str] = None
+
+@telnet_router.post("/connect")
+async def telnet_connect(request: TelnetRequest, current_user: dict = Depends(get_current_user)):
+    """Test Telnet connection to a device"""
+    device = await db.devices.find_one({"id": request.device_id}, {"_id": 0})
+    if not device:
+        raise HTTPException(status_code=404, detail="Device not found")
+    
+    # For demo, simulate connection
+    # In production, use telnetlib3 for actual connection
+    return {
+        "success": True,
+        "message": f"Telnet connection to {device['name']} ({device['ip_address']}) simulated",
+        "note": "Actual telnet requires network access to device"
+    }
+
+@telnet_router.post("/execute")
+async def telnet_execute(request: TelnetRequest, current_user: dict = Depends(get_current_user)):
+    """Execute command via Telnet"""
+    device = await db.devices.find_one({"id": request.device_id}, {"_id": 0})
+    if not device:
+        raise HTTPException(status_code=404, detail="Device not found")
+    
+    # Simulated response
+    return {
+        "success": True,
+        "device": device["name"],
+        "command": request.command,
+        "output": f"Simulated output for command: {request.command}\nDevice: {device['name']}\nIP: {device['ip_address']}",
+        "note": "Actual telnet execution requires network access"
+    }
+
+# ===================== ESCALATION ROUTES =====================
+@escalation_router.get("/contacts")
+async def get_escalation_contacts(current_user: dict = Depends(get_current_user)):
+    """Get all escalation contacts"""
+    contacts = await db.escalation_contacts.find({}, {"_id": 0}).to_list(100)
+    return contacts
+
+@escalation_router.post("/contacts")
+async def create_escalation_contact(contact_data: EscalationContactCreate, current_user: dict = Depends(get_current_user)):
+    """Create escalation contact"""
+    contact = EscalationContact(**contact_data.model_dump())
+    contact_dict = contact.model_dump()
+    contact_dict["created_at"] = contact_dict["created_at"].isoformat()
+    await db.escalation_contacts.insert_one(contact_dict)
+    return contact
+
+@escalation_router.delete("/contacts/{contact_id}")
+async def delete_escalation_contact(contact_id: str, current_user: dict = Depends(get_current_user)):
+    """Delete escalation contact"""
+    result = await db.escalation_contacts.delete_one({"id": contact_id})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Contact not found")
+    return {"message": "Contact deleted"}
+
+@escalation_router.get("/levels")
+async def get_escalation_levels():
+    """Get escalation level configuration"""
+    return ESCALATION_LEVELS
+
+@escalation_router.post("/check")
+async def check_escalations(current_user: dict = Depends(get_current_user)):
+    """Check for incidents/alerts that need escalation"""
+    now = datetime.now(timezone.utc)
+    escalations_needed = []
+    
+    # Get open P1/P2 incidents
+    incidents = await db.incidents.find({
+        "priority": {"$in": ["P1", "P2"]},
+        "status": {"$in": ["open", "in_progress"]}
+    }, {"_id": 0}).to_list(100)
+    
+    for incident in incidents:
+        created_at = datetime.fromisoformat(incident["created_at"].replace("Z", "+00:00"))
+        hours_open = (now - created_at).total_seconds() / 3600
+        
+        for level in ESCALATION_LEVELS:
+            if hours_open >= level["threshold_hours"] and incident["priority"] in level["priority_filter"]:
+                # Check if already escalated to this level
+                existing = await db.escalation_history.find_one({
+                    "incident_id": incident["id"],
+                    "level": level["level"]
+                })
+                
+                if not existing:
+                    escalations_needed.append({
+                        "incident": incident,
+                        "level": level,
+                        "hours_open": round(hours_open, 1)
+                    })
+    
+    return {"escalations_needed": escalations_needed, "count": len(escalations_needed)}
+
+@escalation_router.post("/send")
+async def send_escalation_email(incident_id: str, level: int, current_user: dict = Depends(get_current_user)):
+    """Send escalation email"""
+    incident = await db.incidents.find_one({"id": incident_id}, {"_id": 0})
+    if not incident:
+        raise HTTPException(status_code=404, detail="Incident not found")
+    
+    # Get contacts for this level
+    contacts = await db.escalation_contacts.find({"level": level}, {"_id": 0}).to_list(10)
+    if not contacts:
+        raise HTTPException(status_code=400, detail=f"No escalation contacts configured for level {level}")
+    
+    level_info = next((l for l in ESCALATION_LEVELS if l["level"] == level), None)
+    
+    # Create email content
+    subject = f"[ESCALATION - {level_info['name']}] {incident['priority']} Incident: {incident['title']}"
+    body = f"""
+    <html>
+    <body>
+    <h2>ATECH NOC Commander - Escalation Notice</h2>
+    <p><strong>This incident requires immediate attention.</strong></p>
+    
+    <table style="border-collapse: collapse; width: 100%; max-width: 600px;">
+        <tr><td style="padding: 8px; border: 1px solid #ddd;"><strong>Ticket:</strong></td><td style="padding: 8px; border: 1px solid #ddd;">{incident['ticket_number']}</td></tr>
+        <tr><td style="padding: 8px; border: 1px solid #ddd;"><strong>Priority:</strong></td><td style="padding: 8px; border: 1px solid #ddd; color: {'red' if incident['priority'] == 'P1' else 'orange'};">{incident['priority']}</td></tr>
+        <tr><td style="padding: 8px; border: 1px solid #ddd;"><strong>Title:</strong></td><td style="padding: 8px; border: 1px solid #ddd;">{incident['title']}</td></tr>
+        <tr><td style="padding: 8px; border: 1px solid #ddd;"><strong>Description:</strong></td><td style="padding: 8px; border: 1px solid #ddd;">{incident['description']}</td></tr>
+        <tr><td style="padding: 8px; border: 1px solid #ddd;"><strong>Status:</strong></td><td style="padding: 8px; border: 1px solid #ddd;">{incident['status']}</td></tr>
+        <tr><td style="padding: 8px; border: 1px solid #ddd;"><strong>Created:</strong></td><td style="padding: 8px; border: 1px solid #ddd;">{incident['created_at']}</td></tr>
+        <tr><td style="padding: 8px; border: 1px solid #ddd;"><strong>Escalation Level:</strong></td><td style="padding: 8px; border: 1px solid #ddd;">{level_info['name']}</td></tr>
+    </table>
+    
+    <p style="margin-top: 20px;">Please take immediate action on this incident.</p>
+    <p>- ATECH NOC Commander</p>
+    </body>
+    </html>
+    """
+    
+    # Record escalation
+    escalation_record = {
+        "id": str(uuid.uuid4()),
+        "incident_id": incident_id,
+        "level": level,
+        "level_name": level_info["name"],
+        "contacts": [c["email"] for c in contacts],
+        "sent_at": datetime.now(timezone.utc).isoformat(),
+        "sent_by": current_user["name"]
+    }
+    await db.escalation_history.insert_one(escalation_record)
+    
+    # Update incident
+    await db.incidents.update_one(
+        {"id": incident_id},
+        {"$set": {"escalation_level": level, "last_escalated": datetime.now(timezone.utc).isoformat()}}
+    )
+    
+    # In production, send actual email via Office 365
+    # For demo, we simulate
+    email_sent = False
+    if SMTP_USERNAME and SMTP_PASSWORD:
+        try:
+            msg = MIMEMultipart('alternative')
+            msg['Subject'] = subject
+            msg['From'] = EMAIL_FROM
+            msg['To'] = ', '.join([c["email"] for c in contacts])
+            msg.attach(MIMEText(body, 'html'))
+            
+            with smtplib.SMTP(SMTP_SERVER, SMTP_PORT) as server:
+                server.starttls()
+                server.login(SMTP_USERNAME, SMTP_PASSWORD)
+                server.send_message(msg)
+            email_sent = True
+        except Exception as e:
+            logger.error(f"Failed to send escalation email: {e}")
+    
+    return {
+        "message": "Escalation recorded",
+        "email_sent": email_sent,
+        "recipients": [c["email"] for c in contacts],
+        "level": level_info["name"]
+    }
+
 # Include all routers
 api_router.include_router(auth_router)
 api_router.include_router(devices_router)
@@ -1252,6 +1669,10 @@ api_router.include_router(dashboard_router)
 api_router.include_router(topology_router)
 api_router.include_router(ssh_router)
 api_router.include_router(notifications_router)
+api_router.include_router(agents_router)
+api_router.include_router(snmp_router)
+api_router.include_router(telnet_router)
+api_router.include_router(escalation_router)
 
 app.include_router(api_router)
 

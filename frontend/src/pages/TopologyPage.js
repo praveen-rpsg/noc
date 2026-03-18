@@ -159,21 +159,183 @@ export default function TopologyPage() {
       ctx.stroke();
     });
 
-    // Draw nodes
+    // Draw nodes with Cisco-style icons
     Object.values(nodePositions).forEach(({ x, y, node }) => {
       const color = getDeviceColor(node.type, node.status);
       const isSelected = selectedNode?.id === node.id;
+      const size = isSelected ? 32 : 28;
       
-      // Draw node circle
+      // Draw background circle
       ctx.beginPath();
-      ctx.arc(x, y, isSelected ? 28 : 24, 0, Math.PI * 2);
-      ctx.fillStyle = color;
+      ctx.arc(x, y, size, 0, Math.PI * 2);
+      ctx.fillStyle = '#fff';
       ctx.fill();
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 3;
+      ctx.stroke();
       
       if (isSelected) {
         ctx.strokeStyle = '#1e293b';
-        ctx.lineWidth = 3;
+        ctx.lineWidth = 4;
         ctx.stroke();
+      }
+
+      // Draw Cisco-style icon based on device type
+      ctx.fillStyle = color;
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 2;
+      
+      const drawRouter = () => {
+        // Cisco router icon - circle with arrows
+        ctx.beginPath();
+        ctx.arc(x, y, size * 0.5, 0, Math.PI * 2);
+        ctx.stroke();
+        // Cross arrows
+        ctx.beginPath();
+        ctx.moveTo(x - size * 0.6, y);
+        ctx.lineTo(x + size * 0.6, y);
+        ctx.moveTo(x, y - size * 0.6);
+        ctx.lineTo(x, y + size * 0.6);
+        ctx.stroke();
+        // Arrow heads
+        ctx.beginPath();
+        ctx.moveTo(x + size * 0.4, y - 4);
+        ctx.lineTo(x + size * 0.6, y);
+        ctx.lineTo(x + size * 0.4, y + 4);
+        ctx.fill();
+      };
+      
+      const drawSwitch = () => {
+        // Cisco switch icon - rectangle with arrows
+        ctx.strokeRect(x - size * 0.5, y - size * 0.3, size, size * 0.6);
+        ctx.beginPath();
+        ctx.moveTo(x - size * 0.7, y);
+        ctx.lineTo(x - size * 0.3, y);
+        ctx.moveTo(x + size * 0.3, y);
+        ctx.lineTo(x + size * 0.7, y);
+        ctx.stroke();
+        // Arrows
+        ctx.beginPath();
+        ctx.moveTo(x - size * 0.5, y - 4);
+        ctx.lineTo(x - size * 0.3, y);
+        ctx.lineTo(x - size * 0.5, y + 4);
+        ctx.moveTo(x + size * 0.5, y - 4);
+        ctx.lineTo(x + size * 0.7, y);
+        ctx.lineTo(x + size * 0.5, y + 4);
+        ctx.fill();
+      };
+      
+      const drawFirewall = () => {
+        // Cisco firewall icon - wall with bricks
+        ctx.strokeRect(x - size * 0.4, y - size * 0.5, size * 0.8, size);
+        // Brick lines
+        ctx.beginPath();
+        ctx.moveTo(x - size * 0.4, y - size * 0.17);
+        ctx.lineTo(x + size * 0.4, y - size * 0.17);
+        ctx.moveTo(x - size * 0.4, y + size * 0.17);
+        ctx.lineTo(x + size * 0.4, y + size * 0.17);
+        ctx.moveTo(x, y - size * 0.5);
+        ctx.lineTo(x, y - size * 0.17);
+        ctx.moveTo(x - size * 0.2, y - size * 0.17);
+        ctx.lineTo(x - size * 0.2, y + size * 0.17);
+        ctx.moveTo(x + size * 0.2, y - size * 0.17);
+        ctx.lineTo(x + size * 0.2, y + size * 0.17);
+        ctx.moveTo(x, y + size * 0.17);
+        ctx.lineTo(x, y + size * 0.5);
+        ctx.stroke();
+      };
+      
+      const drawServer = () => {
+        // Cisco server/host icon - rectangle with lines
+        ctx.strokeRect(x - size * 0.35, y - size * 0.45, size * 0.7, size * 0.9);
+        ctx.beginPath();
+        ctx.moveTo(x - size * 0.35, y - size * 0.15);
+        ctx.lineTo(x + size * 0.35, y - size * 0.15);
+        ctx.moveTo(x - size * 0.35, y + size * 0.15);
+        ctx.lineTo(x + size * 0.35, y + size * 0.15);
+        ctx.stroke();
+        // Server indicators
+        ctx.fillRect(x - size * 0.2, y - size * 0.35, size * 0.1, size * 0.1);
+        ctx.fillRect(x - size * 0.2, y - size * 0.05, size * 0.1, size * 0.1);
+        ctx.fillRect(x - size * 0.2, y + size * 0.25, size * 0.1, size * 0.1);
+      };
+      
+      const drawCloud = () => {
+        // Cloud icon
+        ctx.beginPath();
+        ctx.arc(x - size * 0.2, y, size * 0.3, 0, Math.PI * 2);
+        ctx.arc(x + size * 0.15, y - size * 0.1, size * 0.35, 0, Math.PI * 2);
+        ctx.arc(x + size * 0.2, y + size * 0.15, size * 0.25, 0, Math.PI * 2);
+        ctx.fill();
+      };
+      
+      const drawLoadBalancer = () => {
+        // Load balancer - triangle pointing down with horizontal lines
+        ctx.beginPath();
+        ctx.moveTo(x, y - size * 0.4);
+        ctx.lineTo(x + size * 0.4, y + size * 0.3);
+        ctx.lineTo(x - size * 0.4, y + size * 0.3);
+        ctx.closePath();
+        ctx.stroke();
+        // Balance lines
+        ctx.beginPath();
+        ctx.moveTo(x - size * 0.2, y);
+        ctx.lineTo(x + size * 0.2, y);
+        ctx.moveTo(x - size * 0.3, y + size * 0.15);
+        ctx.lineTo(x + size * 0.3, y + size * 0.15);
+        ctx.stroke();
+      };
+      
+      const drawAccessPoint = () => {
+        // Wireless AP icon - antenna with waves
+        ctx.beginPath();
+        ctx.moveTo(x, y + size * 0.4);
+        ctx.lineTo(x, y - size * 0.1);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.arc(x, y + size * 0.4, size * 0.15, 0, Math.PI * 2);
+        ctx.fill();
+        // Waves
+        ctx.beginPath();
+        ctx.arc(x, y - size * 0.2, size * 0.2, Math.PI * 1.3, Math.PI * 1.7);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.arc(x, y - size * 0.2, size * 0.35, Math.PI * 1.25, Math.PI * 1.75);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.arc(x, y - size * 0.2, size * 0.5, Math.PI * 1.2, Math.PI * 1.8);
+        ctx.stroke();
+      };
+
+      // Draw icon based on type
+      switch (node.type) {
+        case 'router':
+          drawRouter();
+          break;
+        case 'switch':
+          drawSwitch();
+          break;
+        case 'firewall':
+          drawFirewall();
+          break;
+        case 'server':
+        case 'virtual_machine':
+          drawServer();
+          break;
+        case 'cloud_instance':
+          drawCloud();
+          break;
+        case 'load_balancer':
+          drawLoadBalancer();
+          break;
+        case 'access_point':
+          drawAccessPoint();
+          break;
+        default:
+          // Default circle
+          ctx.beginPath();
+          ctx.arc(x, y, size * 0.4, 0, Math.PI * 2);
+          ctx.fill();
       }
 
       // Draw status indicator

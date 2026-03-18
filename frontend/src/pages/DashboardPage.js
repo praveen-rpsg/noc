@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
 import { Button } from '../components/ui/button';
 import { Badge } from '../components/ui/badge';
@@ -19,7 +20,8 @@ import {
   Database,
   Zap,
   Target,
-  Timer
+  Timer,
+  ExternalLink
 } from 'lucide-react';
 import {
   AreaChart,
@@ -125,6 +127,7 @@ const StatCard = ({ title, value, subtitle, icon: Icon, trend, trendValue, color
 };
 
 export default function DashboardPage() {
+  const navigate = useNavigate();
   const [stats, setStats] = useState(null);
   const [recentAlerts, setRecentAlerts] = useState([]);
   const [recentIncidents, setRecentIncidents] = useState([]);
@@ -228,27 +231,79 @@ export default function DashboardPage() {
           trend="up"
           trendValue="+0.2%"
         />
-        <StatCard
-          title="Active Alerts"
-          value={stats?.alerts?.active || 0}
-          subtitle={`${stats?.alerts?.critical || 0} critical`}
-          icon={AlertTriangle}
-          color={stats?.alerts?.critical > 0 ? 'danger' : 'warning'}
-        />
-        <StatCard
-          title="Open Incidents"
-          value={stats?.incidents?.open || 0}
-          subtitle={`${stats?.incidents?.p1_open || 0} P1, ${stats?.incidents?.p2_open || 0} P2`}
-          icon={FileWarning}
-          color={stats?.incidents?.p1_open > 0 ? 'danger' : 'primary'}
-        />
-        <StatCard
-          title="Total Devices"
-          value={stats?.devices?.total || 0}
-          subtitle={`${stats?.devices?.online || 0} online`}
-          icon={Server}
-          color="info"
-        />
+        <div 
+          onClick={() => navigate('/alerts')} 
+          className="cursor-pointer group"
+          data-testid="alerts-link"
+        >
+          <Card className="stat-card bg-white border-border/50 shadow-sm hover:shadow-md hover:border-primary/50 transition-all">
+            <CardContent className="p-6">
+              <div className="flex items-start justify-between">
+                <div>
+                  <p className="text-sm font-medium text-muted-foreground flex items-center gap-1">
+                    Active Alerts
+                    <ExternalLink className="h-3 w-3 opacity-0 group-hover:opacity-100 transition-opacity" />
+                  </p>
+                  <p className={`text-3xl font-bold mt-2 ${stats?.alerts?.critical > 0 ? 'text-red-600' : 'text-amber-600'}`}>
+                    {stats?.alerts?.active || 0}
+                  </p>
+                  <p className="text-sm text-muted-foreground mt-1">{stats?.alerts?.critical || 0} critical</p>
+                </div>
+                <div className={`p-3 rounded-xl bg-muted ${stats?.alerts?.critical > 0 ? 'text-red-600' : 'text-amber-600'}`}>
+                  <AlertTriangle className="h-6 w-6" />
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+        <div 
+          onClick={() => navigate('/incidents')} 
+          className="cursor-pointer group"
+          data-testid="incidents-link"
+        >
+          <Card className="stat-card bg-white border-border/50 shadow-sm hover:shadow-md hover:border-primary/50 transition-all">
+            <CardContent className="p-6">
+              <div className="flex items-start justify-between">
+                <div>
+                  <p className="text-sm font-medium text-muted-foreground flex items-center gap-1">
+                    Open Incidents
+                    <ExternalLink className="h-3 w-3 opacity-0 group-hover:opacity-100 transition-opacity" />
+                  </p>
+                  <p className={`text-3xl font-bold mt-2 ${stats?.incidents?.p1_open > 0 ? 'text-red-600' : 'text-primary'}`}>
+                    {stats?.incidents?.open || 0}
+                  </p>
+                  <p className="text-sm text-muted-foreground mt-1">{stats?.incidents?.p1_open || 0} P1, {stats?.incidents?.p2_open || 0} P2</p>
+                </div>
+                <div className={`p-3 rounded-xl bg-muted ${stats?.incidents?.p1_open > 0 ? 'text-red-600' : 'text-primary'}`}>
+                  <FileWarning className="h-6 w-6" />
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+        <div 
+          onClick={() => navigate('/monitoring')} 
+          className="cursor-pointer group"
+          data-testid="devices-link"
+        >
+          <Card className="stat-card bg-white border-border/50 shadow-sm hover:shadow-md hover:border-primary/50 transition-all">
+            <CardContent className="p-6">
+              <div className="flex items-start justify-between">
+                <div>
+                  <p className="text-sm font-medium text-muted-foreground flex items-center gap-1">
+                    Total Devices
+                    <ExternalLink className="h-3 w-3 opacity-0 group-hover:opacity-100 transition-opacity" />
+                  </p>
+                  <p className="text-3xl font-bold mt-2 text-blue-600">{stats?.devices?.total || 0}</p>
+                  <p className="text-sm text-muted-foreground mt-1">{stats?.devices?.online || 0} online</p>
+                </div>
+                <div className="p-3 rounded-xl bg-muted text-blue-600">
+                  <Server className="h-6 w-6" />
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
       </div>
 
       {/* Secondary KPIs */}

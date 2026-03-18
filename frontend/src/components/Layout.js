@@ -19,7 +19,9 @@ import {
   ChevronRight,
   Network,
   Terminal,
-  Bell
+  Bell,
+  Bot,
+  AlertCircle
 } from 'lucide-react';
 
 const AMEYA_LOGO_URL = "https://customer-assets.emergentagent.com/job_network-ops-ai/artifacts/vjap12f5_Atechlogo.jpeg";
@@ -33,6 +35,8 @@ const navItems = [
   { path: '/performance', label: 'Performance', icon: Activity },
   { path: '/assets', label: 'Assets', icon: Package },
   { path: '/ssh-terminal', label: 'SSH Terminal', icon: Terminal },
+  { path: '/agents', label: 'AI Agents', icon: Bot },
+  { path: '/escalation', label: 'Escalation', icon: AlertCircle },
   { path: '/reports', label: 'Reports', icon: FileText },
   { path: '/configuration', label: 'Configuration', icon: Settings },
   { path: '/sla', label: 'SLA Management', icon: Target },
