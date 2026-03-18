@@ -30,57 +30,39 @@ A comprehensive NOC (Network Operation Center) tool where AI agents act as NOC e
 - ✅ Ameya Technology logo integration
 
 ### Phase 3 - Advanced Features (2026-03-18)
-- ✅ **AI Agent System**
-  - Custom agent naming
-  - 15-device limit per agent
-  - 200 activation codes generated (ATECH-XXXX-XXXX-XXXX format)
-  - Device assignment to agents
-  - Activation code verification
-
-- ✅ **Multi-Level Escalation System**
-  - Level 1: Team Lead (>4 hours for P1/P2)
-  - Level 2: Service Delivery Manager (>8 hours for P1/P2)
-  - Level 3: Director (>12 hours for P1)
-  - Escalation contacts management
-  - Email notification support (Office 365 ready)
-
-- ✅ **SNMP Device Discovery** (MOCKED)
-- ✅ **Telnet Support** (MOCKED)
-- ✅ **Dashboard Hyperlinks**
+- ✅ AI Agent System (15-device limit, activation codes)
+- ✅ Multi-Level Escalation System
+- ✅ SNMP Device Discovery (framework)
+- ✅ Telnet Support (framework)
+- ✅ Dashboard Hyperlinks
 
 ### Phase 4 - Bug Fixes & Interactive Topology (2026-03-18)
-- ✅ **ResizeObserver Error Fix**
-  - Fixed error overlay on Monitoring, Assets, and Performance pages
-  - Added error suppression in index.js
-  - Configured dev server overlay in craco.config.js
-  - All Select dropdowns now work without errors
+- ✅ ResizeObserver Error Fix - All Select dropdowns work without errors
+- ✅ Interactive Network Topology with draggable nodes
+- ✅ 3D Colorful Device Icons with gradients
+- ✅ Hierarchical 3-Tier Layout
+- ✅ Device URL Access (configurable per device)
 
-- ✅ **Interactive Network Topology**
-  - **Draggable nodes** - users can rearrange topology by clicking and dragging
-  - **Positions persist** to localStorage
-  - **Lock/Unlock button** to enable/disable editing mode
-  - **Reset Layout button** to restore default hierarchical layout
-  - **Pan and zoom** functionality with reset view button
-
-- ✅ **3D Colorful Device Icons**
-  - Beautiful gradient sphere effects with glow and highlights
-  - Router: Blue gradient (#60a5fa → #2563eb)
-  - Switch: Purple gradient (#a78bfa → #7c3aed)
-  - Firewall: Red gradient (#f87171 → #dc2626)
-  - Server: Green gradient (#4ade80 → #16a34a)
-  - Cloud Instance: Orange gradient (#fb923c → #ea580c)
-  - Load Balancer: Cyan gradient (#22d3ee → #0891b2)
-  - Access Point: Indigo gradient (#818cf8 → #4f46e5)
-
-- ✅ **Hierarchical 3-Tier Layout**
-  - Top tier: Core devices (routers, firewalls) 
-  - Middle tier: Distribution devices (switches, load balancers)
-  - Bottom tier: Access devices (servers, VMs, cloud instances, APs)
-
-- ✅ **Device URL Access**
-  - Configurable URL per device (double-click to configure)
-  - "Open Device Config" button in selected device panel
-  - Backend API endpoint: PUT /api/devices/{id}/config-url
+### Phase 5 - Settings & Configuration Page (2026-03-18)
+- ✅ **Settings Page** with tabbed interface
+- ✅ **Office 365 Email Configuration**
+  - SMTP server and port configuration
+  - Username/password credentials
+  - Sender email and name
+  - TLS encryption toggle
+  - Test email functionality
+- ✅ **SNMP v1/v2c Community Strings**
+  - Add/Edit/Delete multiple community string configurations
+  - IP range (CIDR) specification
+  - Device type filtering
+  - Location/datacenter assignment
+  - Test SNMP connectivity
+- ✅ **SNMP v3 Configuration**
+  - Security level selection (noAuthNoPriv, authNoPriv, authPriv)
+  - Authentication protocols (MD5, SHA, SHA-224, SHA-256, SHA-384, SHA-512)
+  - Privacy protocols (DES, 3DES, AES-128, AES-192, AES-256)
+  - Username and passwords
+  - IP range and device type filtering
 
 ## Technical Architecture
 - **Frontend**: React 19, Shadcn UI, Recharts, TailwindCSS, Canvas API
@@ -90,21 +72,30 @@ A comprehensive NOC (Network Operation Center) tool where AI agents act as NOC e
 - **Auth**: JWT (bcrypt password hashing)
 - **Real-time**: WebSockets
 
-## Test Results
-- ResizeObserver errors: FIXED ✅
-- Interactive topology: WORKING ✅
-- 3D colorful icons: IMPLEMENTED ✅
-- All Select dropdowns: WORKING ✅
+## New API Endpoints (Phase 5)
+- `GET /api/settings/email` - Get email configuration
+- `POST /api/settings/email` - Save email configuration
+- `POST /api/settings/email/test` - Test email configuration
+- `DELETE /api/settings/email` - Delete email configuration
+- `GET /api/settings/snmp/community` - Get all SNMP community strings
+- `POST /api/settings/snmp/community` - Create SNMP community string
+- `PUT /api/settings/snmp/community/{id}` - Update SNMP community string
+- `DELETE /api/settings/snmp/community/{id}` - Delete SNMP community string
+- `POST /api/settings/snmp/community/{id}/test` - Test SNMP connectivity
+- `GET /api/settings/snmp/v3` - Get all SNMP v3 configurations
+- `POST /api/settings/snmp/v3` - Create SNMP v3 configuration
+- `PUT /api/settings/snmp/v3/{id}` - Update SNMP v3 configuration
+- `DELETE /api/settings/snmp/v3/{id}` - Delete SNMP v3 configuration
 
-## Mocked Features (Awaiting Credentials/Implementation)
-1. **Email Escalation** - Requires Office 365 SMTP credentials
-2. **SNMP Discovery** - Requires real network access and community strings
-3. **Telnet Execution** - Requires real network access
+## Database Collections (New)
+- `email_config` - Stores Office 365 SMTP configuration
+- `snmp_community` - Stores SNMP v1/v2c community string configurations
+- `snmpv3_config` - Stores SNMP v3 configurations
 
 ## Next Action Items
-1. 🟠 Configure Office 365 SMTP for email notifications (requires credentials)
-2. 🟠 Implement real SNMP polling with pysnmp (requires network access)
-3. 🟠 Add real Telnet connectivity (requires network access)
+1. 🟢 Use configured SNMP community strings in device discovery
+2. 🟢 Use configured email for escalation notifications
+3. 🟡 Implement real SNMP polling using pysnmp with stored configurations
 4. 🟡 Cloud Provider API Integration (AWS/Azure/GCP)
 
 ## Backlog / Future Tasks

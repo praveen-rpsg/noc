@@ -21,7 +21,8 @@ import {
   Terminal,
   Bell,
   Bot,
-  AlertCircle
+  AlertCircle,
+  Cog
 } from 'lucide-react';
 
 const AMEYA_LOGO_URL = "https://customer-assets.emergentagent.com/job_network-ops-ai/artifacts/vjap12f5_Atechlogo.jpeg";
@@ -40,6 +41,7 @@ const navItems = [
   { path: '/reports', label: 'Reports', icon: FileText },
   { path: '/configuration', label: 'Configuration', icon: Settings },
   { path: '/sla', label: 'SLA Management', icon: Target },
+  { path: '/settings', label: 'Settings', icon: Cog },
 ];
 
 export const Sidebar = ({ notificationCount = 0 }) => {

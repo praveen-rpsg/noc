@@ -354,6 +354,90 @@ class AIAnalysisRequest(BaseModel):
     query: str
     incident_id: Optional[str] = None
 
+# ===================== SETTINGS MODELS =====================
+class EmailConfig(BaseModel):
+    """Office 365 Email Configuration"""
+    model_config = ConfigDict(extra="ignore")
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    smtp_server: str = "smtp.office365.com"
+    smtp_port: int = 587
+    username: str  # O365 email address
+    password: str  # App password or OAuth token
+    sender_email: str  # From email address
+    sender_name: str = "ATECH NOC Commander"
+    use_tls: bool = True
+    is_active: bool = True
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+class EmailConfigCreate(BaseModel):
+    smtp_server: str = "smtp.office365.com"
+    smtp_port: int = 587
+    username: str
+    password: str
+    sender_email: str
+    sender_name: str = "ATECH NOC Commander"
+    use_tls: bool = True
+
+class SNMPCommunityString(BaseModel):
+    """SNMP Community String for device groups"""
+    model_config = ConfigDict(extra="ignore")
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    name: str  # Friendly name for this config
+    community_string: str  # The actual community string (read-only or read-write)
+    version: str = "v2c"  # v1, v2c, v3
+    ip_range: Optional[str] = None  # CIDR notation e.g., "192.168.1.0/24"
+    device_types: List[str] = []  # Device types this applies to
+    location: Optional[str] = None  # Location/datacenter this applies to
+    description: Optional[str] = None
+    is_active: bool = True
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+class SNMPCommunityStringCreate(BaseModel):
+    name: str
+    community_string: str
+    version: str = "v2c"
+    ip_range: Optional[str] = None
+    device_types: List[str] = []
+    location: Optional[str] = None
+    description: Optional[str] = None
+
+class SNMPv3Config(BaseModel):
+    """SNMP v3 Configuration with authentication"""
+    model_config = ConfigDict(extra="ignore")
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    name: str
+    security_level: str = "authPriv"  # noAuthNoPriv, authNoPriv, authPriv
+    username: str
+    auth_protocol: str = "SHA"  # MD5, SHA, SHA224, SHA256, SHA384, SHA512
+    auth_password: Optional[str] = None
+    priv_protocol: str = "AES"  # DES, 3DES, AES, AES192, AES256
+    priv_password: Optional[str] = None
+    ip_range: Optional[str] = None
+    device_types: List[str] = []
+    location: Optional[str] = None
+    description: Optional[str] = None
+    is_active: bool = True
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+class SNMPv3ConfigCreate(BaseModel):
+    name: str
+    security_level: str = "authPriv"
+    username: str
+    auth_protocol: str = "SHA"
+    auth_password: Optional[str] = None
+    priv_protocol: str = "AES"
+    priv_password: Optional[str] = None
+    ip_range: Optional[str] = None
+    device_types: List[str] = []
+    location: Optional[str] = None
+    description: Optional[str] = None
+
+# Create settings router
+settings_router = APIRouter(prefix="/settings", tags=["Settings"])
+
 # ===================== HELPER FUNCTIONS =====================
 def hash_password(password: str) -> str:
     return bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
@@ -1666,6 +1750,249 @@ async def send_escalation_email(incident_id: str, level: int, current_user: dict
         "level": level_info["name"]
     }
 
+# ===================== SETTINGS ENDPOINTS =====================
+
+# Email Configuration Endpoints
+@settings_router.get("/email")
+async def get_email_config(current_user: dict = Depends(get_current_user)):
+    """Get the current email configuration (password hidden)"""
+    config = await db.email_config.find_one({}, {"_id": 0})
+    if not config:
+        return None
+    # Hide password
+    if "password" in config:
+        config["password"] = "********"
+    return config
+
+@settings_router.post("/email")
+async def save_email_config(config: EmailConfigCreate, current_user: dict = Depends(get_current_user)):
+    """Save or update email configuration"""
+    # Check if config already exists
+    existing = await db.email_config.find_one({})
+    
+    config_data = config.model_dump()
+    config_data["updated_at"] = datetime.now(timezone.utc).isoformat()
+    
+    if existing:
+        # Update existing config
+        await db.email_config.update_one({}, {"$set": config_data})
+        config_data["id"] = existing.get("id", str(uuid.uuid4()))
+    else:
+        # Create new config
+        config_data["id"] = str(uuid.uuid4())
+        config_data["created_at"] = datetime.now(timezone.utc).isoformat()
+        config_data["is_active"] = True
+        # Make a copy for insertion (MongoDB adds _id to the dict)
+        insert_data = dict(config_data)
+        await db.email_config.insert_one(insert_data)
+    
+    # Hide password in response
+    config_data["password"] = "********"
+    return {"message": "Email configuration saved successfully", "config": config_data}
+
+@settings_router.post("/email/test")
+async def test_email_config(test_email: str, current_user: dict = Depends(get_current_user)):
+    """Test email configuration by sending a test email"""
+    config = await db.email_config.find_one({}, {"_id": 0})
+    if not config:
+        raise HTTPException(status_code=400, detail="Email configuration not found. Please configure email settings first.")
+    
+    try:
+        # Create test email
+        msg = MIMEMultipart()
+        msg['From'] = f"{config.get('sender_name', 'NOC')} <{config['sender_email']}>"
+        msg['To'] = test_email
+        msg['Subject'] = "ATECH NOC Commander - Test Email"
+        
+        body = """
+        <html>
+        <body style="font-family: Arial, sans-serif;">
+            <h2 style="color: #1e40af;">ATECH NOC Commander</h2>
+            <p>This is a test email from ATECH NOC Commander.</p>
+            <p>If you received this email, your email configuration is working correctly!</p>
+            <hr>
+            <p style="color: #6b7280; font-size: 12px;">
+                Sent from: {sender_email}<br>
+                SMTP Server: {smtp_server}:{smtp_port}
+            </p>
+        </body>
+        </html>
+        """.format(
+            sender_email=config['sender_email'],
+            smtp_server=config['smtp_server'],
+            smtp_port=config['smtp_port']
+        )
+        
+        msg.attach(MIMEText(body, 'html'))
+        
+        # Send email
+        with smtplib.SMTP(config['smtp_server'], config['smtp_port']) as server:
+            if config.get('use_tls', True):
+                server.starttls()
+            server.login(config['username'], config['password'])
+            server.send_message(msg)
+        
+        return {"success": True, "message": f"Test email sent successfully to {test_email}"}
+    except smtplib.SMTPAuthenticationError:
+        raise HTTPException(status_code=400, detail="Authentication failed. Please check your username and password.")
+    except smtplib.SMTPException as e:
+        raise HTTPException(status_code=400, detail=f"SMTP error: {str(e)}")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to send email: {str(e)}")
+
+@settings_router.delete("/email")
+async def delete_email_config(current_user: dict = Depends(get_current_user)):
+    """Delete email configuration"""
+    result = await db.email_config.delete_many({})
+    return {"message": "Email configuration deleted", "deleted_count": result.deleted_count}
+
+# SNMP Community String Endpoints
+@settings_router.get("/snmp/community")
+async def get_snmp_community_strings(current_user: dict = Depends(get_current_user)):
+    """Get all SNMP community string configurations (strings hidden)"""
+    configs = await db.snmp_community.find({}, {"_id": 0}).to_list(100)
+    # Hide community strings
+    for config in configs:
+        if "community_string" in config:
+            config["community_string"] = "********"
+    return configs
+
+@settings_router.post("/snmp/community")
+async def create_snmp_community_string(config: SNMPCommunityStringCreate, current_user: dict = Depends(get_current_user)):
+    """Create a new SNMP community string configuration"""
+    config_data = config.model_dump()
+    config_data["id"] = str(uuid.uuid4())
+    config_data["created_at"] = datetime.now(timezone.utc).isoformat()
+    config_data["updated_at"] = datetime.now(timezone.utc).isoformat()
+    config_data["is_active"] = True
+    
+    # Make a copy for insertion (MongoDB adds _id to the dict)
+    insert_data = dict(config_data)
+    await db.snmp_community.insert_one(insert_data)
+    
+    # Hide community string in response
+    config_data["community_string"] = "********"
+    return {"message": "SNMP community string configuration created", "config": config_data}
+
+@settings_router.put("/snmp/community/{config_id}")
+async def update_snmp_community_string(config_id: str, config: SNMPCommunityStringCreate, current_user: dict = Depends(get_current_user)):
+    """Update an SNMP community string configuration"""
+    existing = await db.snmp_community.find_one({"id": config_id})
+    if not existing:
+        raise HTTPException(status_code=404, detail="SNMP configuration not found")
+    
+    config_data = config.model_dump()
+    config_data["updated_at"] = datetime.now(timezone.utc).isoformat()
+    
+    await db.snmp_community.update_one({"id": config_id}, {"$set": config_data})
+    
+    # Hide community string in response
+    config_data["id"] = config_id
+    config_data["community_string"] = "********"
+    return {"message": "SNMP configuration updated", "config": config_data}
+
+@settings_router.delete("/snmp/community/{config_id}")
+async def delete_snmp_community_string(config_id: str, current_user: dict = Depends(get_current_user)):
+    """Delete an SNMP community string configuration"""
+    result = await db.snmp_community.delete_one({"id": config_id})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="SNMP configuration not found")
+    return {"message": "SNMP configuration deleted"}
+
+@settings_router.post("/snmp/community/{config_id}/test")
+async def test_snmp_community_string(config_id: str, target_ip: str, current_user: dict = Depends(get_current_user)):
+    """Test SNMP community string by querying a device"""
+    config = await db.snmp_community.find_one({"id": config_id}, {"_id": 0})
+    if not config:
+        raise HTTPException(status_code=404, detail="SNMP configuration not found")
+    
+    try:
+        from pysnmp.hlapi.asyncio import (
+            getCmd, SnmpEngine, CommunityData, UdpTransportTarget, ContextData, ObjectType, ObjectIdentity
+        )
+        
+        # Test with sysDescr OID
+        iterator = await getCmd(
+            SnmpEngine(),
+            CommunityData(config['community_string'], mpModel=1 if config['version'] == 'v2c' else 0),
+            UdpTransportTarget((target_ip, 161), timeout=5, retries=1),
+            ContextData(),
+            ObjectType(ObjectIdentity('SNMPv2-MIB', 'sysDescr', 0))
+        )
+        
+        errorIndication, errorStatus, errorIndex, varBinds = iterator
+        
+        if errorIndication:
+            return {"success": False, "message": f"SNMP error: {errorIndication}"}
+        elif errorStatus:
+            return {"success": False, "message": f"SNMP error: {errorStatus.prettyPrint()} at {errorIndex}"}
+        else:
+            result = ""
+            for varBind in varBinds:
+                result = str(varBind[1])
+            return {"success": True, "message": "SNMP query successful", "device_description": result}
+    except ImportError:
+        return {"success": False, "message": "pysnmp not installed. SNMP testing unavailable."}
+    except Exception as e:
+        return {"success": False, "message": f"SNMP test failed: {str(e)}"}
+
+# SNMP v3 Configuration Endpoints
+@settings_router.get("/snmp/v3")
+async def get_snmpv3_configs(current_user: dict = Depends(get_current_user)):
+    """Get all SNMP v3 configurations (passwords hidden)"""
+    configs = await db.snmpv3_config.find({}, {"_id": 0}).to_list(100)
+    # Hide passwords
+    for config in configs:
+        if "auth_password" in config:
+            config["auth_password"] = "********"
+        if "priv_password" in config:
+            config["priv_password"] = "********"
+    return configs
+
+@settings_router.post("/snmp/v3")
+async def create_snmpv3_config(config: SNMPv3ConfigCreate, current_user: dict = Depends(get_current_user)):
+    """Create a new SNMP v3 configuration"""
+    config_data = config.model_dump()
+    config_data["id"] = str(uuid.uuid4())
+    config_data["created_at"] = datetime.now(timezone.utc).isoformat()
+    config_data["updated_at"] = datetime.now(timezone.utc).isoformat()
+    config_data["is_active"] = True
+    
+    # Make a copy for insertion (MongoDB adds _id to the dict)
+    insert_data = dict(config_data)
+    await db.snmpv3_config.insert_one(insert_data)
+    
+    # Hide passwords in response
+    config_data["auth_password"] = "********"
+    config_data["priv_password"] = "********"
+    return {"message": "SNMP v3 configuration created", "config": config_data}
+
+@settings_router.put("/snmp/v3/{config_id}")
+async def update_snmpv3_config(config_id: str, config: SNMPv3ConfigCreate, current_user: dict = Depends(get_current_user)):
+    """Update an SNMP v3 configuration"""
+    existing = await db.snmpv3_config.find_one({"id": config_id})
+    if not existing:
+        raise HTTPException(status_code=404, detail="SNMP v3 configuration not found")
+    
+    config_data = config.model_dump()
+    config_data["updated_at"] = datetime.now(timezone.utc).isoformat()
+    
+    await db.snmpv3_config.update_one({"id": config_id}, {"$set": config_data})
+    
+    # Hide passwords in response
+    config_data["id"] = config_id
+    config_data["auth_password"] = "********"
+    config_data["priv_password"] = "********"
+    return {"message": "SNMP v3 configuration updated", "config": config_data}
+
+@settings_router.delete("/snmp/v3/{config_id}")
+async def delete_snmpv3_config(config_id: str, current_user: dict = Depends(get_current_user)):
+    """Delete an SNMP v3 configuration"""
+    result = await db.snmpv3_config.delete_one({"id": config_id})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="SNMP v3 configuration not found")
+    return {"message": "SNMP v3 configuration deleted"}
+
 # Include all routers
 api_router.include_router(auth_router)
 api_router.include_router(devices_router)
@@ -1685,6 +2012,7 @@ api_router.include_router(agents_router)
 api_router.include_router(snmp_router)
 api_router.include_router(telnet_router)
 api_router.include_router(escalation_router)
+api_router.include_router(settings_router)
 
 app.include_router(api_router)
 

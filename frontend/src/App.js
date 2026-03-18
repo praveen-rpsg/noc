@@ -20,6 +20,7 @@ import ConfigurationPage from "./pages/ConfigurationPage";
 import SLAPage from "./pages/SLAPage";
 import AgentsPage from "./pages/AgentsPage";
 import EscalationPage from "./pages/EscalationPage";
+import SettingsPage from "./pages/SettingsPage";
 
 const ProtectedRoute = ({ children }) => {
   const { user, loading } = useAuth();
@@ -169,6 +170,14 @@ function AppRoutes() {
         element={
           <ProtectedRoute>
             <EscalationPage />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/settings"
+        element={
+          <ProtectedRoute>
+            <SettingsPage />
           </ProtectedRoute>
         }
       />
