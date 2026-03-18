@@ -1,15 +1,19 @@
-from fastapi import FastAPI, APIRouter
+from fastapi import FastAPI, APIRouter, HTTPException, Depends, status
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
 import os
 import logging
 from pathlib import Path
-from pydantic import BaseModel, Field, ConfigDict
-from typing import List
+from pydantic import BaseModel, Field, ConfigDict, EmailStr
+from typing import List, Optional, Dict, Any
 import uuid
-from datetime import datetime, timezone
-
+from datetime import datetime, timezone, timedelta
+import jwt
+import bcrypt
+import asyncio
+from enum import Enum
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -19,54 +23,958 @@ mongo_url = os.environ['MONGO_URL']
 client = AsyncIOMotorClient(mongo_url)
 db = client[os.environ['DB_NAME']]
 
-# Create the main app without a prefix
-app = FastAPI()
+# JWT Config
+JWT_SECRET = os.environ.get('JWT_SECRET', 'noc-commander-secret')
+JWT_ALGORITHM = os.environ.get('JWT_ALGORITHM', 'HS256')
+ACCESS_TOKEN_EXPIRE_MINUTES = int(os.environ.get('ACCESS_TOKEN_EXPIRE_MINUTES', 1440))
 
-# Create a router with the /api prefix
+# Emergent LLM Key
+EMERGENT_LLM_KEY = os.environ.get('EMERGENT_LLM_KEY', '')
+
+# Create the main app
+app = FastAPI(title="NOC Commander API", version="1.0.0")
+
+# Create routers
 api_router = APIRouter(prefix="/api")
+auth_router = APIRouter(prefix="/auth", tags=["Authentication"])
+devices_router = APIRouter(prefix="/devices", tags=["Devices"])
+alerts_router = APIRouter(prefix="/alerts", tags=["Alerts"])
+incidents_router = APIRouter(prefix="/incidents", tags=["Incidents"])
+performance_router = APIRouter(prefix="/performance", tags=["Performance"])
+assets_router = APIRouter(prefix="/assets", tags=["Assets"])
+reports_router = APIRouter(prefix="/reports", tags=["Reports"])
+config_router = APIRouter(prefix="/config", tags=["Configuration"])
+sla_router = APIRouter(prefix="/sla", tags=["SLA"])
+ai_router = APIRouter(prefix="/ai", tags=["AI"])
+dashboard_router = APIRouter(prefix="/dashboard", tags=["Dashboard"])
 
+security = HTTPBearer()
 
-# Define Models
-class StatusCheck(BaseModel):
-    model_config = ConfigDict(extra="ignore")  # Ignore MongoDB's _id field
-    
+# Configure logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
+
+# ===================== ENUMS =====================
+class DeviceType(str, Enum):
+    ROUTER = "router"
+    SWITCH = "switch"
+    FIREWALL = "firewall"
+    LOAD_BALANCER = "load_balancer"
+    SERVER = "server"
+    VM = "virtual_machine"
+    CLOUD_INSTANCE = "cloud_instance"
+    ACCESS_POINT = "access_point"
+
+class DeviceStatus(str, Enum):
+    ONLINE = "online"
+    OFFLINE = "offline"
+    DEGRADED = "degraded"
+    MAINTENANCE = "maintenance"
+    UNKNOWN = "unknown"
+
+class AlertSeverity(str, Enum):
+    CRITICAL = "critical"
+    HIGH = "high"
+    MEDIUM = "medium"
+    LOW = "low"
+    INFO = "info"
+
+class AlertStatus(str, Enum):
+    ACTIVE = "active"
+    ACKNOWLEDGED = "acknowledged"
+    RESOLVED = "resolved"
+    SUPPRESSED = "suppressed"
+
+class IncidentPriority(str, Enum):
+    P1 = "P1"
+    P2 = "P2"
+    P3 = "P3"
+    P4 = "P4"
+
+class IncidentStatus(str, Enum):
+    OPEN = "open"
+    IN_PROGRESS = "in_progress"
+    ESCALATED = "escalated"
+    RESOLVED = "resolved"
+    CLOSED = "closed"
+
+# ===================== MODELS =====================
+class UserCreate(BaseModel):
+    email: EmailStr
+    password: str
+    name: str
+    role: str = "operator"
+
+class UserLogin(BaseModel):
+    email: EmailStr
+    password: str
+
+class User(BaseModel):
+    model_config = ConfigDict(extra="ignore")
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
-    client_name: str
+    email: EmailStr
+    name: str
+    role: str
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+class TokenResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    user: User
+
+class Device(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    name: str
+    type: DeviceType
+    ip_address: str
+    location: str
+    status: DeviceStatus = DeviceStatus.ONLINE
+    vendor: Optional[str] = None
+    model: Optional[str] = None
+    serial_number: Optional[str] = None
+    firmware_version: Optional[str] = None
+    last_seen: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    cpu_usage: float = 0.0
+    memory_usage: float = 0.0
+    uptime_hours: int = 0
+    tags: List[str] = []
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+class DeviceCreate(BaseModel):
+    name: str
+    type: DeviceType
+    ip_address: str
+    location: str
+    vendor: Optional[str] = None
+    model: Optional[str] = None
+    serial_number: Optional[str] = None
+    firmware_version: Optional[str] = None
+    tags: List[str] = []
+
+class Alert(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    device_id: str
+    device_name: str
+    severity: AlertSeverity
+    status: AlertStatus = AlertStatus.ACTIVE
+    title: str
+    description: str
+    metric_name: Optional[str] = None
+    metric_value: Optional[float] = None
+    threshold: Optional[float] = None
+    acknowledged_by: Optional[str] = None
+    resolved_by: Optional[str] = None
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    acknowledged_at: Optional[datetime] = None
+    resolved_at: Optional[datetime] = None
+
+class AlertCreate(BaseModel):
+    device_id: str
+    device_name: str
+    severity: AlertSeverity
+    title: str
+    description: str
+    metric_name: Optional[str] = None
+    metric_value: Optional[float] = None
+    threshold: Optional[float] = None
+
+class Incident(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    ticket_number: str = Field(default_factory=lambda: f"INC-{datetime.now().strftime('%Y%m%d')}-{str(uuid.uuid4())[:6].upper()}")
+    title: str
+    description: str
+    priority: IncidentPriority
+    status: IncidentStatus = IncidentStatus.OPEN
+    category: str
+    affected_devices: List[str] = []
+    related_alerts: List[str] = []
+    assigned_to: Optional[str] = None
+    escalation_level: int = 1
+    ai_suggestions: Optional[str] = None
+    root_cause: Optional[str] = None
+    resolution: Optional[str] = None
+    created_by: str
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    resolved_at: Optional[datetime] = None
+    sla_breach: bool = False
+
+class IncidentCreate(BaseModel):
+    title: str
+    description: str
+    priority: IncidentPriority
+    category: str
+    affected_devices: List[str] = []
+    related_alerts: List[str] = []
+
+class PerformanceMetric(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    device_id: str
+    device_name: str
     timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    cpu_usage: float
+    memory_usage: float
+    disk_usage: float
+    bandwidth_in: float
+    bandwidth_out: float
+    latency_ms: float
+    packet_loss: float
+    uptime_hours: int
 
-class StatusCheckCreate(BaseModel):
-    client_name: str
+class Asset(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    name: str
+    asset_tag: str
+    type: str
+    vendor: str
+    model: str
+    serial_number: str
+    location: str
+    owner: str
+    status: str = "active"
+    purchase_date: Optional[str] = None
+    warranty_expiry: Optional[str] = None
+    eol_date: Optional[str] = None
+    contract_details: Optional[str] = None
+    license_info: Optional[str] = None
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
-# Add your routes to the router instead of directly to app
-@api_router.get("/")
-async def root():
-    return {"message": "Hello World"}
+class AssetCreate(BaseModel):
+    name: str
+    asset_tag: str
+    type: str
+    vendor: str
+    model: str
+    serial_number: str
+    location: str
+    owner: str
+    purchase_date: Optional[str] = None
+    warranty_expiry: Optional[str] = None
+    eol_date: Optional[str] = None
+    contract_details: Optional[str] = None
+    license_info: Optional[str] = None
 
-@api_router.post("/status", response_model=StatusCheck)
-async def create_status_check(input: StatusCheckCreate):
-    status_dict = input.model_dump()
-    status_obj = StatusCheck(**status_dict)
+class Report(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    title: str
+    type: str
+    period_start: str
+    period_end: str
+    generated_by: str
+    content: Dict[str, Any]
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+class Configuration(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    device_id: str
+    device_name: str
+    config_type: str
+    config_data: str
+    version: int = 1
+    backup_date: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    created_by: str
+    is_compliant: bool = True
+    compliance_notes: Optional[str] = None
+
+class SLARecord(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    incident_id: str
+    priority: IncidentPriority
+    response_time_target_mins: int
+    resolution_time_target_mins: int
+    actual_response_time_mins: Optional[int] = None
+    actual_resolution_time_mins: Optional[int] = None
+    response_sla_met: Optional[bool] = None
+    resolution_sla_met: Optional[bool] = None
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+class AIAnalysisRequest(BaseModel):
+    context: str
+    query: str
+    incident_id: Optional[str] = None
+
+# ===================== HELPER FUNCTIONS =====================
+def hash_password(password: str) -> str:
+    return bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
+
+def verify_password(password: str, hashed: str) -> bool:
+    return bcrypt.checkpw(password.encode(), hashed.encode())
+
+def create_token(user_id: str, email: str) -> str:
+    expire = datetime.now(timezone.utc) + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    payload = {"sub": user_id, "email": email, "exp": expire}
+    return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
+
+async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)) -> dict:
+    try:
+        payload = jwt.decode(credentials.credentials, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+        user = await db.users.find_one({"id": payload["sub"]}, {"_id": 0, "password_hash": 0})
+        if not user:
+            raise HTTPException(status_code=401, detail="User not found")
+        return user
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(status_code=401, detail="Token expired")
+    except jwt.InvalidTokenError:
+        raise HTTPException(status_code=401, detail="Invalid token")
+
+def serialize_doc(doc: dict) -> dict:
+    """Remove MongoDB _id and serialize datetime fields"""
+    if doc and "_id" in doc:
+        del doc["_id"]
+    for key, value in doc.items():
+        if isinstance(value, datetime):
+            doc[key] = value.isoformat()
+    return doc
+
+# ===================== AI SERVICE =====================
+async def get_ai_analysis(context: str, query: str) -> str:
+    """Get AI analysis using Emergent LLM"""
+    try:
+        from emergentintegrations.llm.chat import LlmChat, UserMessage
+        
+        chat = LlmChat(
+            api_key=EMERGENT_LLM_KEY,
+            session_id=f"noc-{str(uuid.uuid4())[:8]}",
+            system_message="""You are an expert Network Operation Center (NOC) AI assistant. 
+You help NOC engineers with:
+- Troubleshooting network and infrastructure issues
+- Root Cause Analysis (RCA)
+- Providing step-by-step resolution suggestions
+- Analyzing performance metrics and logs
+- Identifying patterns and anomalies
+- Recommending preventive measures
+
+Be concise, technical, and actionable in your responses."""
+        ).with_model("openai", "gpt-5.2")
+        
+        user_message = UserMessage(text=f"Context: {context}\n\nQuery: {query}")
+        response = await chat.send_message(user_message)
+        return response
+    except Exception as e:
+        logger.error(f"AI analysis error: {e}")
+        return f"AI analysis temporarily unavailable. Error: {str(e)}"
+
+# ===================== AUTH ROUTES =====================
+@auth_router.post("/register", response_model=TokenResponse)
+async def register(user_data: UserCreate):
+    existing = await db.users.find_one({"email": user_data.email})
+    if existing:
+        raise HTTPException(status_code=400, detail="Email already registered")
     
-    # Convert to dict and serialize datetime to ISO string for MongoDB
-    doc = status_obj.model_dump()
-    doc['timestamp'] = doc['timestamp'].isoformat()
+    user = User(email=user_data.email, name=user_data.name, role=user_data.role)
+    user_dict = user.model_dump()
+    user_dict["password_hash"] = hash_password(user_data.password)
+    user_dict["created_at"] = user_dict["created_at"].isoformat()
     
-    _ = await db.status_checks.insert_one(doc)
-    return status_obj
+    await db.users.insert_one(user_dict)
+    token = create_token(user.id, user.email)
+    return TokenResponse(access_token=token, user=user)
 
-@api_router.get("/status", response_model=List[StatusCheck])
-async def get_status_checks():
-    # Exclude MongoDB's _id field from the query results
-    status_checks = await db.status_checks.find({}, {"_id": 0}).to_list(1000)
+@auth_router.post("/login", response_model=TokenResponse)
+async def login(credentials: UserLogin):
+    user_doc = await db.users.find_one({"email": credentials.email})
+    if not user_doc or not verify_password(credentials.password, user_doc.get("password_hash", "")):
+        raise HTTPException(status_code=401, detail="Invalid credentials")
     
-    # Convert ISO string timestamps back to datetime objects
-    for check in status_checks:
-        if isinstance(check['timestamp'], str):
-            check['timestamp'] = datetime.fromisoformat(check['timestamp'])
-    
-    return status_checks
+    user = User(
+        id=user_doc["id"],
+        email=user_doc["email"],
+        name=user_doc["name"],
+        role=user_doc["role"],
+        created_at=datetime.fromisoformat(user_doc["created_at"]) if isinstance(user_doc["created_at"], str) else user_doc["created_at"]
+    )
+    token = create_token(user.id, user.email)
+    return TokenResponse(access_token=token, user=user)
 
-# Include the router in the main app
+@auth_router.get("/me", response_model=User)
+async def get_me(current_user: dict = Depends(get_current_user)):
+    return User(**current_user)
+
+# ===================== DEVICE ROUTES =====================
+@devices_router.get("", response_model=List[Device])
+async def get_devices(current_user: dict = Depends(get_current_user)):
+    devices = await db.devices.find({}, {"_id": 0}).to_list(1000)
+    return [Device(**serialize_doc(d)) for d in devices]
+
+@devices_router.get("/{device_id}", response_model=Device)
+async def get_device(device_id: str, current_user: dict = Depends(get_current_user)):
+    device = await db.devices.find_one({"id": device_id}, {"_id": 0})
+    if not device:
+        raise HTTPException(status_code=404, detail="Device not found")
+    return Device(**serialize_doc(device))
+
+@devices_router.post("", response_model=Device)
+async def create_device(device_data: DeviceCreate, current_user: dict = Depends(get_current_user)):
+    device = Device(**device_data.model_dump())
+    device_dict = device.model_dump()
+    device_dict["created_at"] = device_dict["created_at"].isoformat()
+    device_dict["last_seen"] = device_dict["last_seen"].isoformat()
+    await db.devices.insert_one(device_dict)
+    return device
+
+@devices_router.put("/{device_id}", response_model=Device)
+async def update_device(device_id: str, device_data: DeviceCreate, current_user: dict = Depends(get_current_user)):
+    existing = await db.devices.find_one({"id": device_id})
+    if not existing:
+        raise HTTPException(status_code=404, detail="Device not found")
+    
+    update_data = device_data.model_dump()
+    update_data["last_seen"] = datetime.now(timezone.utc).isoformat()
+    await db.devices.update_one({"id": device_id}, {"$set": update_data})
+    
+    updated = await db.devices.find_one({"id": device_id}, {"_id": 0})
+    return Device(**serialize_doc(updated))
+
+@devices_router.delete("/{device_id}")
+async def delete_device(device_id: str, current_user: dict = Depends(get_current_user)):
+    result = await db.devices.delete_one({"id": device_id})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Device not found")
+    return {"message": "Device deleted"}
+
+# ===================== ALERT ROUTES =====================
+@alerts_router.get("", response_model=List[Alert])
+async def get_alerts(status: Optional[str] = None, severity: Optional[str] = None, current_user: dict = Depends(get_current_user)):
+    query = {}
+    if status:
+        query["status"] = status
+    if severity:
+        query["severity"] = severity
+    alerts = await db.alerts.find(query, {"_id": 0}).sort("created_at", -1).to_list(1000)
+    return [Alert(**serialize_doc(a)) for a in alerts]
+
+@alerts_router.post("", response_model=Alert)
+async def create_alert(alert_data: AlertCreate, current_user: dict = Depends(get_current_user)):
+    alert = Alert(**alert_data.model_dump())
+    alert_dict = alert.model_dump()
+    alert_dict["created_at"] = alert_dict["created_at"].isoformat()
+    await db.alerts.insert_one(alert_dict)
+    return alert
+
+@alerts_router.put("/{alert_id}/acknowledge")
+async def acknowledge_alert(alert_id: str, current_user: dict = Depends(get_current_user)):
+    result = await db.alerts.update_one(
+        {"id": alert_id},
+        {"$set": {
+            "status": AlertStatus.ACKNOWLEDGED.value,
+            "acknowledged_by": current_user["name"],
+            "acknowledged_at": datetime.now(timezone.utc).isoformat()
+        }}
+    )
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Alert not found")
+    return {"message": "Alert acknowledged"}
+
+@alerts_router.put("/{alert_id}/resolve")
+async def resolve_alert(alert_id: str, current_user: dict = Depends(get_current_user)):
+    result = await db.alerts.update_one(
+        {"id": alert_id},
+        {"$set": {
+            "status": AlertStatus.RESOLVED.value,
+            "resolved_by": current_user["name"],
+            "resolved_at": datetime.now(timezone.utc).isoformat()
+        }}
+    )
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Alert not found")
+    return {"message": "Alert resolved"}
+
+# ===================== INCIDENT ROUTES =====================
+@incidents_router.get("", response_model=List[Incident])
+async def get_incidents(status: Optional[str] = None, priority: Optional[str] = None, current_user: dict = Depends(get_current_user)):
+    query = {}
+    if status:
+        query["status"] = status
+    if priority:
+        query["priority"] = priority
+    incidents = await db.incidents.find(query, {"_id": 0}).sort("created_at", -1).to_list(1000)
+    return [Incident(**serialize_doc(i)) for i in incidents]
+
+@incidents_router.get("/{incident_id}", response_model=Incident)
+async def get_incident(incident_id: str, current_user: dict = Depends(get_current_user)):
+    incident = await db.incidents.find_one({"id": incident_id}, {"_id": 0})
+    if not incident:
+        raise HTTPException(status_code=404, detail="Incident not found")
+    return Incident(**serialize_doc(incident))
+
+@incidents_router.post("", response_model=Incident)
+async def create_incident(incident_data: IncidentCreate, current_user: dict = Depends(get_current_user)):
+    incident = Incident(**incident_data.model_dump(), created_by=current_user["name"])
+    incident_dict = incident.model_dump()
+    incident_dict["created_at"] = incident_dict["created_at"].isoformat()
+    incident_dict["updated_at"] = incident_dict["updated_at"].isoformat()
+    await db.incidents.insert_one(incident_dict)
+    
+    # Create SLA record
+    sla_targets = {"P1": (15, 60), "P2": (30, 240), "P3": (60, 480), "P4": (120, 1440)}
+    target = sla_targets.get(incident.priority.value, (60, 480))
+    sla_record = SLARecord(
+        incident_id=incident.id,
+        priority=incident.priority,
+        response_time_target_mins=target[0],
+        resolution_time_target_mins=target[1]
+    )
+    sla_dict = sla_record.model_dump()
+    sla_dict["created_at"] = sla_dict["created_at"].isoformat()
+    await db.sla_records.insert_one(sla_dict)
+    
+    return incident
+
+@incidents_router.put("/{incident_id}", response_model=Incident)
+async def update_incident(incident_id: str, update_data: dict, current_user: dict = Depends(get_current_user)):
+    existing = await db.incidents.find_one({"id": incident_id})
+    if not existing:
+        raise HTTPException(status_code=404, detail="Incident not found")
+    
+    update_data["updated_at"] = datetime.now(timezone.utc).isoformat()
+    if update_data.get("status") in ["resolved", "closed"]:
+        update_data["resolved_at"] = datetime.now(timezone.utc).isoformat()
+    
+    await db.incidents.update_one({"id": incident_id}, {"$set": update_data})
+    updated = await db.incidents.find_one({"id": incident_id}, {"_id": 0})
+    return Incident(**serialize_doc(updated))
+
+@incidents_router.post("/{incident_id}/ai-analysis")
+async def get_incident_ai_analysis(incident_id: str, current_user: dict = Depends(get_current_user)):
+    incident = await db.incidents.find_one({"id": incident_id}, {"_id": 0})
+    if not incident:
+        raise HTTPException(status_code=404, detail="Incident not found")
+    
+    context = f"""
+Incident: {incident['title']}
+Description: {incident['description']}
+Priority: {incident['priority']}
+Category: {incident['category']}
+Status: {incident['status']}
+Affected Devices: {', '.join(incident.get('affected_devices', []))}
+"""
+    
+    analysis = await get_ai_analysis(
+        context,
+        "Provide troubleshooting steps, probable root cause, and resolution recommendations for this incident."
+    )
+    
+    await db.incidents.update_one(
+        {"id": incident_id},
+        {"$set": {"ai_suggestions": analysis, "updated_at": datetime.now(timezone.utc).isoformat()}}
+    )
+    
+    return {"analysis": analysis}
+
+# ===================== PERFORMANCE ROUTES =====================
+@performance_router.get("", response_model=List[PerformanceMetric])
+async def get_performance_metrics(device_id: Optional[str] = None, hours: int = 24, current_user: dict = Depends(get_current_user)):
+    query = {}
+    if device_id:
+        query["device_id"] = device_id
+    
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
+    query["timestamp"] = {"$gte": cutoff.isoformat()}
+    
+    metrics = await db.performance_metrics.find(query, {"_id": 0}).sort("timestamp", -1).to_list(5000)
+    return [PerformanceMetric(**serialize_doc(m)) for m in metrics]
+
+@performance_router.post("", response_model=PerformanceMetric)
+async def create_performance_metric(metric_data: dict, current_user: dict = Depends(get_current_user)):
+    metric = PerformanceMetric(**metric_data)
+    metric_dict = metric.model_dump()
+    metric_dict["timestamp"] = metric_dict["timestamp"].isoformat()
+    await db.performance_metrics.insert_one(metric_dict)
+    return metric
+
+# ===================== ASSET ROUTES =====================
+@assets_router.get("", response_model=List[Asset])
+async def get_assets(current_user: dict = Depends(get_current_user)):
+    assets = await db.assets.find({}, {"_id": 0}).to_list(1000)
+    return [Asset(**serialize_doc(a)) for a in assets]
+
+@assets_router.get("/{asset_id}", response_model=Asset)
+async def get_asset(asset_id: str, current_user: dict = Depends(get_current_user)):
+    asset = await db.assets.find_one({"id": asset_id}, {"_id": 0})
+    if not asset:
+        raise HTTPException(status_code=404, detail="Asset not found")
+    return Asset(**serialize_doc(asset))
+
+@assets_router.post("", response_model=Asset)
+async def create_asset(asset_data: AssetCreate, current_user: dict = Depends(get_current_user)):
+    asset = Asset(**asset_data.model_dump())
+    asset_dict = asset.model_dump()
+    asset_dict["created_at"] = asset_dict["created_at"].isoformat()
+    await db.assets.insert_one(asset_dict)
+    return asset
+
+@assets_router.put("/{asset_id}", response_model=Asset)
+async def update_asset(asset_id: str, asset_data: AssetCreate, current_user: dict = Depends(get_current_user)):
+    existing = await db.assets.find_one({"id": asset_id})
+    if not existing:
+        raise HTTPException(status_code=404, detail="Asset not found")
+    
+    await db.assets.update_one({"id": asset_id}, {"$set": asset_data.model_dump()})
+    updated = await db.assets.find_one({"id": asset_id}, {"_id": 0})
+    return Asset(**serialize_doc(updated))
+
+@assets_router.delete("/{asset_id}")
+async def delete_asset(asset_id: str, current_user: dict = Depends(get_current_user)):
+    result = await db.assets.delete_one({"id": asset_id})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Asset not found")
+    return {"message": "Asset deleted"}
+
+# ===================== REPORT ROUTES =====================
+@reports_router.get("", response_model=List[Report])
+async def get_reports(report_type: Optional[str] = None, current_user: dict = Depends(get_current_user)):
+    query = {}
+    if report_type:
+        query["type"] = report_type
+    reports = await db.reports.find(query, {"_id": 0}).sort("created_at", -1).to_list(100)
+    return [Report(**serialize_doc(r)) for r in reports]
+
+@reports_router.post("/generate")
+async def generate_report(report_type: str, period_start: str, period_end: str, current_user: dict = Depends(get_current_user)):
+    # Generate report based on type
+    content = {}
+    
+    if report_type == "daily_health":
+        devices = await db.devices.find({}, {"_id": 0}).to_list(1000)
+        alerts = await db.alerts.find({"status": "active"}, {"_id": 0}).to_list(1000)
+        content = {
+            "total_devices": len(devices),
+            "online_devices": len([d for d in devices if d.get("status") == "online"]),
+            "active_alerts": len(alerts),
+            "critical_alerts": len([a for a in alerts if a.get("severity") == "critical"])
+        }
+    elif report_type == "incident_summary":
+        incidents = await db.incidents.find({}, {"_id": 0}).to_list(1000)
+        content = {
+            "total_incidents": len(incidents),
+            "open_incidents": len([i for i in incidents if i.get("status") == "open"]),
+            "resolved_incidents": len([i for i in incidents if i.get("status") in ["resolved", "closed"]]),
+            "by_priority": {
+                "P1": len([i for i in incidents if i.get("priority") == "P1"]),
+                "P2": len([i for i in incidents if i.get("priority") == "P2"]),
+                "P3": len([i for i in incidents if i.get("priority") == "P3"]),
+                "P4": len([i for i in incidents if i.get("priority") == "P4"])
+            }
+        }
+    elif report_type == "sla_compliance":
+        sla_records = await db.sla_records.find({}, {"_id": 0}).to_list(1000)
+        met_count = len([s for s in sla_records if s.get("resolution_sla_met") == True])
+        total = len(sla_records) or 1
+        content = {
+            "total_tracked": len(sla_records),
+            "sla_met": met_count,
+            "sla_breached": len(sla_records) - met_count,
+            "compliance_percentage": round(met_count / total * 100, 2)
+        }
+    
+    report = Report(
+        title=f"{report_type.replace('_', ' ').title()} Report",
+        type=report_type,
+        period_start=period_start,
+        period_end=period_end,
+        generated_by=current_user["name"],
+        content=content
+    )
+    
+    report_dict = report.model_dump()
+    report_dict["created_at"] = report_dict["created_at"].isoformat()
+    await db.reports.insert_one(report_dict)
+    
+    return report
+
+# ===================== CONFIG ROUTES =====================
+@config_router.get("", response_model=List[Configuration])
+async def get_configurations(device_id: Optional[str] = None, current_user: dict = Depends(get_current_user)):
+    query = {}
+    if device_id:
+        query["device_id"] = device_id
+    configs = await db.configurations.find(query, {"_id": 0}).sort("backup_date", -1).to_list(1000)
+    return [Configuration(**serialize_doc(c)) for c in configs]
+
+@config_router.post("/backup")
+async def create_config_backup(device_id: str, config_type: str, config_data: str, current_user: dict = Depends(get_current_user)):
+    device = await db.devices.find_one({"id": device_id}, {"_id": 0})
+    if not device:
+        raise HTTPException(status_code=404, detail="Device not found")
+    
+    # Get latest version
+    latest = await db.configurations.find_one(
+        {"device_id": device_id, "config_type": config_type},
+        sort=[("version", -1)]
+    )
+    version = (latest.get("version", 0) if latest else 0) + 1
+    
+    config = Configuration(
+        device_id=device_id,
+        device_name=device["name"],
+        config_type=config_type,
+        config_data=config_data,
+        version=version,
+        created_by=current_user["name"]
+    )
+    
+    config_dict = config.model_dump()
+    config_dict["backup_date"] = config_dict["backup_date"].isoformat()
+    await db.configurations.insert_one(config_dict)
+    
+    return {"message": "Configuration backed up", "version": version}
+
+# ===================== SLA ROUTES =====================
+@sla_router.get("", response_model=List[SLARecord])
+async def get_sla_records(current_user: dict = Depends(get_current_user)):
+    records = await db.sla_records.find({}, {"_id": 0}).sort("created_at", -1).to_list(1000)
+    return [SLARecord(**serialize_doc(r)) for r in records]
+
+@sla_router.get("/metrics")
+async def get_sla_metrics(current_user: dict = Depends(get_current_user)):
+    records = await db.sla_records.find({}, {"_id": 0}).to_list(1000)
+    
+    total = len(records) or 1
+    response_met = len([r for r in records if r.get("response_sla_met") == True])
+    resolution_met = len([r for r in records if r.get("resolution_sla_met") == True])
+    
+    return {
+        "total_tracked": len(records),
+        "response_sla_compliance": round(response_met / total * 100, 2),
+        "resolution_sla_compliance": round(resolution_met / total * 100, 2),
+        "overall_compliance": round((response_met + resolution_met) / (total * 2) * 100, 2)
+    }
+
+# ===================== AI ROUTES =====================
+@ai_router.post("/analyze")
+async def analyze_with_ai(request: AIAnalysisRequest, current_user: dict = Depends(get_current_user)):
+    analysis = await get_ai_analysis(request.context, request.query)
+    return {"analysis": analysis}
+
+@ai_router.post("/traceroute-analysis")
+async def analyze_traceroute(target: str, traceroute_output: str, current_user: dict = Depends(get_current_user)):
+    context = f"Traceroute to {target}:\n{traceroute_output}"
+    analysis = await get_ai_analysis(
+        context,
+        "Analyze this traceroute output. Identify where the connection might be dropping or experiencing high latency. Provide recommendations."
+    )
+    return {"analysis": analysis}
+
+@ai_router.post("/log-analysis")
+async def analyze_logs(logs: str, current_user: dict = Depends(get_current_user)):
+    analysis = await get_ai_analysis(
+        logs,
+        "Analyze these logs for errors, warnings, and anomalies. Identify patterns and provide recommendations."
+    )
+    return {"analysis": analysis}
+
+# ===================== DASHBOARD ROUTES =====================
+@dashboard_router.get("/stats")
+async def get_dashboard_stats(current_user: dict = Depends(get_current_user)):
+    devices = await db.devices.find({}, {"_id": 0}).to_list(1000)
+    alerts = await db.alerts.find({}, {"_id": 0}).to_list(1000)
+    incidents = await db.incidents.find({}, {"_id": 0}).to_list(1000)
+    
+    active_alerts = [a for a in alerts if a.get("status") == "active"]
+    open_incidents = [i for i in incidents if i.get("status") in ["open", "in_progress"]]
+    
+    # Calculate KPIs
+    resolved_incidents = [i for i in incidents if i.get("resolved_at")]
+    mttd = 0
+    mttr = 0
+    
+    if resolved_incidents:
+        # Simplified MTTR calculation
+        mttr = 45  # Demo value in minutes
+    
+    online_devices = len([d for d in devices if d.get("status") == "online"])
+    total_devices = len(devices) or 1
+    uptime_pct = round(online_devices / total_devices * 100, 2)
+    
+    return {
+        "devices": {
+            "total": len(devices),
+            "online": online_devices,
+            "offline": len([d for d in devices if d.get("status") == "offline"]),
+            "degraded": len([d for d in devices if d.get("status") == "degraded"]),
+            "maintenance": len([d for d in devices if d.get("status") == "maintenance"])
+        },
+        "alerts": {
+            "total": len(alerts),
+            "active": len(active_alerts),
+            "critical": len([a for a in active_alerts if a.get("severity") == "critical"]),
+            "high": len([a for a in active_alerts if a.get("severity") == "high"]),
+            "medium": len([a for a in active_alerts if a.get("severity") == "medium"]),
+            "low": len([a for a in active_alerts if a.get("severity") == "low"])
+        },
+        "incidents": {
+            "total": len(incidents),
+            "open": len(open_incidents),
+            "p1_open": len([i for i in open_incidents if i.get("priority") == "P1"]),
+            "p2_open": len([i for i in open_incidents if i.get("priority") == "P2"])
+        },
+        "kpis": {
+            "uptime_percentage": uptime_pct,
+            "mttd_minutes": 5,
+            "mttr_minutes": mttr,
+            "sla_compliance": 98.5,
+            "fcr_rate": 75.0
+        }
+    }
+
+@dashboard_router.get("/recent-alerts")
+async def get_recent_alerts(limit: int = 10, current_user: dict = Depends(get_current_user)):
+    alerts = await db.alerts.find({}, {"_id": 0}).sort("created_at", -1).to_list(limit)
+    return [serialize_doc(a) for a in alerts]
+
+@dashboard_router.get("/recent-incidents")
+async def get_recent_incidents(limit: int = 10, current_user: dict = Depends(get_current_user)):
+    incidents = await db.incidents.find({}, {"_id": 0}).sort("created_at", -1).to_list(limit)
+    return [serialize_doc(i) for i in incidents]
+
+# ===================== SEED DATA =====================
+@api_router.post("/seed")
+async def seed_demo_data(current_user: dict = Depends(get_current_user)):
+    """Seed database with demo data"""
+    import random
+    
+    # Clear existing data
+    await db.devices.delete_many({})
+    await db.alerts.delete_many({})
+    await db.incidents.delete_many({})
+    await db.performance_metrics.delete_many({})
+    await db.assets.delete_many({})
+    
+    # Create demo devices
+    demo_devices = [
+        {"name": "Core-Router-01", "type": "router", "ip_address": "10.0.1.1", "location": "DC-East", "vendor": "Cisco", "model": "ASR 9000", "status": "online"},
+        {"name": "Core-Switch-01", "type": "switch", "ip_address": "10.0.1.2", "location": "DC-East", "vendor": "Cisco", "model": "Catalyst 9500", "status": "online"},
+        {"name": "Firewall-01", "type": "firewall", "ip_address": "10.0.1.3", "location": "DC-East", "vendor": "Palo Alto", "model": "PA-5260", "status": "online"},
+        {"name": "Load-Balancer-01", "type": "load_balancer", "ip_address": "10.0.1.4", "location": "DC-East", "vendor": "F5", "model": "BIG-IP i5800", "status": "online"},
+        {"name": "Server-Web-01", "type": "server", "ip_address": "10.0.2.10", "location": "DC-East", "vendor": "Dell", "model": "PowerEdge R750", "status": "online"},
+        {"name": "Server-Web-02", "type": "server", "ip_address": "10.0.2.11", "location": "DC-East", "vendor": "Dell", "model": "PowerEdge R750", "status": "degraded"},
+        {"name": "Server-DB-01", "type": "server", "ip_address": "10.0.3.10", "location": "DC-East", "vendor": "HP", "model": "ProLiant DL380", "status": "online"},
+        {"name": "AWS-Instance-01", "type": "cloud_instance", "ip_address": "172.31.1.10", "location": "AWS-us-east-1", "vendor": "AWS", "model": "c5.xlarge", "status": "online"},
+        {"name": "Azure-VM-01", "type": "cloud_instance", "ip_address": "172.16.1.10", "location": "Azure-EastUS", "vendor": "Azure", "model": "Standard_D4s_v3", "status": "online"},
+        {"name": "Edge-Router-NYC", "type": "router", "ip_address": "10.1.1.1", "location": "NYC-Office", "vendor": "Juniper", "model": "MX240", "status": "online"},
+        {"name": "Edge-Switch-NYC", "type": "switch", "ip_address": "10.1.1.2", "location": "NYC-Office", "vendor": "Arista", "model": "7050X3", "status": "offline"},
+        {"name": "WiFi-AP-Floor1", "type": "access_point", "ip_address": "10.1.2.10", "location": "NYC-Office", "vendor": "Aruba", "model": "AP-535", "status": "online"},
+    ]
+    
+    for d in demo_devices:
+        device = Device(
+            **d,
+            cpu_usage=random.uniform(20, 80),
+            memory_usage=random.uniform(30, 70),
+            uptime_hours=random.randint(100, 5000)
+        )
+        device_dict = device.model_dump()
+        device_dict["created_at"] = device_dict["created_at"].isoformat()
+        device_dict["last_seen"] = device_dict["last_seen"].isoformat()
+        await db.devices.insert_one(device_dict)
+    
+    # Get device list for alerts
+    devices = await db.devices.find({}, {"_id": 0}).to_list(20)
+    
+    # Create demo alerts
+    alert_templates = [
+        {"severity": "critical", "title": "High CPU Usage", "description": "CPU usage exceeded 90% threshold", "metric_name": "cpu_usage", "threshold": 90},
+        {"severity": "high", "title": "Memory Usage Warning", "description": "Memory usage at 85%", "metric_name": "memory_usage", "threshold": 85},
+        {"severity": "medium", "title": "Disk Space Low", "description": "Disk usage at 80%", "metric_name": "disk_usage", "threshold": 80},
+        {"severity": "critical", "title": "Device Unreachable", "description": "Device not responding to ping", "metric_name": "availability", "threshold": 0},
+        {"severity": "high", "title": "High Latency Detected", "description": "Network latency exceeded 100ms", "metric_name": "latency", "threshold": 100},
+        {"severity": "low", "title": "Interface Flapping", "description": "Network interface experiencing intermittent connectivity", "metric_name": "interface_status", "threshold": 0},
+    ]
+    
+    for i, template in enumerate(alert_templates[:4]):
+        device = devices[i % len(devices)]
+        alert = Alert(
+            device_id=device["id"],
+            device_name=device["name"],
+            severity=AlertSeverity(template["severity"]),
+            title=template["title"],
+            description=template["description"],
+            metric_name=template["metric_name"],
+            metric_value=random.uniform(template["threshold"], template["threshold"] + 15),
+            threshold=template["threshold"]
+        )
+        alert_dict = alert.model_dump()
+        alert_dict["created_at"] = alert_dict["created_at"].isoformat()
+        await db.alerts.insert_one(alert_dict)
+    
+    # Create demo incidents
+    incident_templates = [
+        {"title": "Network Outage - NYC Office", "description": "Complete network outage affecting NYC office. All users unable to connect.", "priority": "P1", "category": "Network"},
+        {"title": "Web Server Performance Degradation", "description": "Server-Web-02 showing high response times and increased error rates.", "priority": "P2", "category": "Server"},
+        {"title": "Firewall Policy Update Required", "description": "New application requires firewall rule changes.", "priority": "P3", "category": "Security"},
+        {"title": "Backup Job Failure", "description": "Nightly backup job for DB server failed.", "priority": "P2", "category": "Backup"},
+    ]
+    
+    for template in incident_templates:
+        incident = Incident(
+            title=template["title"],
+            description=template["description"],
+            priority=IncidentPriority(template["priority"]),
+            category=template["category"],
+            created_by=current_user["name"],
+            affected_devices=[devices[0]["id"]]
+        )
+        incident_dict = incident.model_dump()
+        incident_dict["created_at"] = incident_dict["created_at"].isoformat()
+        incident_dict["updated_at"] = incident_dict["updated_at"].isoformat()
+        await db.incidents.insert_one(incident_dict)
+    
+    # Create demo assets
+    demo_assets = [
+        {"name": "Core Router", "asset_tag": "NET-001", "type": "Network", "vendor": "Cisco", "model": "ASR 9000", "serial_number": "SN123456", "location": "DC-East", "owner": "Network Team", "warranty_expiry": "2025-12-31"},
+        {"name": "Primary Database Server", "asset_tag": "SRV-001", "type": "Server", "vendor": "Dell", "model": "PowerEdge R750", "serial_number": "SN789012", "location": "DC-East", "owner": "Infrastructure Team", "warranty_expiry": "2026-06-30"},
+        {"name": "Firewall Primary", "asset_tag": "SEC-001", "type": "Security", "vendor": "Palo Alto", "model": "PA-5260", "serial_number": "SN345678", "location": "DC-East", "owner": "Security Team", "eol_date": "2027-01-01"},
+    ]
+    
+    for a in demo_assets:
+        asset = Asset(**a)
+        asset_dict = asset.model_dump()
+        asset_dict["created_at"] = asset_dict["created_at"].isoformat()
+        await db.assets.insert_one(asset_dict)
+    
+    # Create demo performance metrics
+    for device in devices[:5]:
+        for i in range(24):
+            metric = PerformanceMetric(
+                device_id=device["id"],
+                device_name=device["name"],
+                timestamp=datetime.now(timezone.utc) - timedelta(hours=i),
+                cpu_usage=random.uniform(20, 80),
+                memory_usage=random.uniform(30, 70),
+                disk_usage=random.uniform(40, 75),
+                bandwidth_in=random.uniform(100, 900),
+                bandwidth_out=random.uniform(50, 500),
+                latency_ms=random.uniform(1, 50),
+                packet_loss=random.uniform(0, 2),
+                uptime_hours=random.randint(100, 5000)
+            )
+            metric_dict = metric.model_dump()
+            metric_dict["timestamp"] = metric_dict["timestamp"].isoformat()
+            await db.performance_metrics.insert_one(metric_dict)
+    
+    return {"message": "Demo data seeded successfully"}
+
+# Include all routers
+api_router.include_router(auth_router)
+api_router.include_router(devices_router)
+api_router.include_router(alerts_router)
+api_router.include_router(incidents_router)
+api_router.include_router(performance_router)
+api_router.include_router(assets_router)
+api_router.include_router(reports_router)
+api_router.include_router(config_router)
+api_router.include_router(sla_router)
+api_router.include_router(ai_router)
+api_router.include_router(dashboard_router)
+
 app.include_router(api_router)
 
 app.add_middleware(
@@ -76,13 +984,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
 
 @app.on_event("shutdown")
 async def shutdown_db_client():

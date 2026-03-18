@@ -1,34 +1,142 @@
-.App-logo {
-    height: 40vmin;
-    pointer-events: none;
+/* NOC Commander - Main App Styles */
+
+/* Remove default center alignment */
+.App {
+  text-align: left;
 }
 
-@media (prefers-reduced-motion: no-preference) {
-    .App-logo {
-        animation: App-logo-spin infinite 20s linear;
-    }
+/* Smooth transitions for interactive elements */
+button, a, input, select {
+  transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease, transform 0.1s ease;
 }
 
-.App-header {
-    background-color: #0f0f10;
-    min-height: 100vh;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    font-size: calc(10px + 2vmin);
-    color: white;
+button:active {
+  transform: scale(0.98);
 }
 
-.App-link {
-    color: #61dafb;
+/* Focus styles */
+*:focus-visible {
+  outline: 2px solid hsl(var(--ring));
+  outline-offset: 2px;
 }
 
-@keyframes App-logo-spin {
-    from {
-        transform: rotate(0deg);
-    }
-    to {
-        transform: rotate(360deg);
-    }
+/* Table styles */
+.table-row-hover {
+  transition: background-color 0.15s ease;
+}
+
+/* Card hover effects */
+.stat-card {
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.stat-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.08);
+}
+
+/* Sidebar active state */
+.sidebar-item.active {
+  position: relative;
+}
+
+.sidebar-item.active::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 3px;
+  height: 60%;
+  background: hsl(var(--primary-foreground));
+  border-radius: 0 2px 2px 0;
+}
+
+/* Chart container */
+.recharts-wrapper {
+  font-family: 'Public Sans', sans-serif;
+}
+
+/* Badge animations */
+.badge-pulse {
+  animation: badge-pulse 2s infinite;
+}
+
+@keyframes badge-pulse {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.7;
+  }
+}
+
+/* Loading spinner */
+.loading-spinner {
+  display: inline-block;
+  width: 20px;
+  height: 20px;
+  border: 2px solid hsl(var(--muted));
+  border-radius: 50%;
+  border-top-color: hsl(var(--primary));
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Scrollbar for tables */
+.scroll-area-viewport::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+.scroll-area-viewport::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.scroll-area-viewport::-webkit-scrollbar-thumb {
+  background: hsl(var(--muted-foreground) / 0.2);
+  border-radius: 3px;
+}
+
+.scroll-area-viewport::-webkit-scrollbar-thumb:hover {
+  background: hsl(var(--muted-foreground) / 0.4);
+}
+
+/* Dialog animations */
+[data-state="open"] {
+  animation: dialog-in 0.2s ease-out;
+}
+
+@keyframes dialog-in {
+  from {
+    opacity: 0;
+    transform: scale(0.95);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+/* Toast styles */
+[data-sonner-toast] {
+  font-family: 'Public Sans', sans-serif !important;
+}
+
+/* Print styles */
+@media print {
+  .sidebar,
+  button,
+  .no-print {
+    display: none !important;
+  }
+  
+  main {
+    margin-left: 0 !important;
+  }
 }
