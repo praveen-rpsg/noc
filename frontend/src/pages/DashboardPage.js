@@ -198,7 +198,7 @@ export default function DashboardPage() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-3xl font-bold tracking-tight font-['Manrope']">Dashboard</h1>
-          <p className="text-muted-foreground mt-1">Network Operation Center Overview</p>
+          <p className="text-muted-foreground mt-1">ATECH NOC Commander - Network Operation Center Overview</p>
         </div>
         <div className="flex items-center gap-3">
           <Button 

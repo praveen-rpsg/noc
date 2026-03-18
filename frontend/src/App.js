@@ -9,10 +9,12 @@ import { MainLayout } from "./components/Layout";
 import LoginPage from "./pages/LoginPage";
 import DashboardPage from "./pages/DashboardPage";
 import MonitoringPage from "./pages/MonitoringPage";
+import TopologyPage from "./pages/TopologyPage";
 import AlertsPage from "./pages/AlertsPage";
 import IncidentsPage from "./pages/IncidentsPage";
 import PerformancePage from "./pages/PerformancePage";
 import AssetsPage from "./pages/AssetsPage";
+import SSHTerminalPage from "./pages/SSHTerminalPage";
 import ReportsPage from "./pages/ReportsPage";
 import ConfigurationPage from "./pages/ConfigurationPage";
 import SLAPage from "./pages/SLAPage";
@@ -81,6 +83,14 @@ function AppRoutes() {
         }
       />
       <Route
+        path="/topology"
+        element={
+          <ProtectedRoute>
+            <TopologyPage />
+          </ProtectedRoute>
+        }
+      />
+      <Route
         path="/alerts"
         element={
           <ProtectedRoute>
@@ -109,6 +119,14 @@ function AppRoutes() {
         element={
           <ProtectedRoute>
             <AssetsPage />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/ssh-terminal"
+        element={
+          <ProtectedRoute>
+            <SSHTerminalPage />
           </ProtectedRoute>
         }
       />

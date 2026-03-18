@@ -8,6 +8,8 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs'
 import { Alert, AlertDescription } from '../components/ui/alert';
 import { Server, Shield, AlertTriangle } from 'lucide-react';
 
+const AMEYA_LOGO_URL = "https://customer-assets.emergentagent.com/job_network-ops-ai/artifacts/vjap12f5_Atechlogo.jpeg";
+
 export default function LoginPage() {
   const { login, register } = useAuth();
   const [loading, setLoading] = useState(false);
@@ -53,10 +55,14 @@ export default function LoginPage() {
       <div className="w-full max-w-md">
         {/* Logo and Title */}
         <div className="text-center mb-8">
-          <div className="inline-flex items-center justify-center w-16 h-16 bg-primary rounded-xl mb-4 shadow-lg">
-            <Server className="h-8 w-8 text-primary-foreground" />
+          <div className="inline-flex items-center justify-center mb-4">
+            <img 
+              src={AMEYA_LOGO_URL} 
+              alt="Ameya Technologies" 
+              className="h-20 w-20 object-contain rounded-xl shadow-lg"
+            />
           </div>
-          <h1 className="text-3xl font-bold tracking-tight font-['Manrope'] text-foreground">NOC Commander</h1>
+          <h1 className="text-3xl font-bold tracking-tight font-['Manrope'] text-foreground">ATECH NOC COMMANDER</h1>
           <p className="text-muted-foreground mt-2">AI-Powered Network Operation Center</p>
         </div>
 

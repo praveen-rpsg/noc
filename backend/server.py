@@ -1,4 +1,4 @@
-from fastapi import FastAPI, APIRouter, HTTPException, Depends, status
+from fastapi import FastAPI, APIRouter, HTTPException, Depends, status, WebSocket, WebSocketDisconnect
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
@@ -7,13 +7,16 @@ import os
 import logging
 from pathlib import Path
 from pydantic import BaseModel, Field, ConfigDict, EmailStr
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Set
 import uuid
 from datetime import datetime, timezone, timedelta
 import jwt
 import bcrypt
 import asyncio
 from enum import Enum
+import json
+import paramiko
+import io
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -32,7 +35,32 @@ ACCESS_TOKEN_EXPIRE_MINUTES = int(os.environ.get('ACCESS_TOKEN_EXPIRE_MINUTES', 
 EMERGENT_LLM_KEY = os.environ.get('EMERGENT_LLM_KEY', '')
 
 # Create the main app
-app = FastAPI(title="NOC Commander API", version="1.0.0")
+app = FastAPI(title="ATECH NOC Commander API", version="2.0.0")
+
+# WebSocket connections for real-time alerts
+class ConnectionManager:
+    def __init__(self):
+        self.active_connections: List[WebSocket] = []
+    
+    async def connect(self, websocket: WebSocket):
+        await websocket.accept()
+        self.active_connections.append(websocket)
+    
+    def disconnect(self, websocket: WebSocket):
+        if websocket in self.active_connections:
+            self.active_connections.remove(websocket)
+    
+    async def broadcast(self, message: dict):
+        for connection in self.active_connections:
+            try:
+                await connection.send_json(message)
+            except:
+                pass
+
+ws_manager = ConnectionManager()
+
+# Notification queue for alerts
+notification_queue: List[dict] = []
 
 # Create routers
 api_router = APIRouter(prefix="/api")
@@ -47,6 +75,9 @@ config_router = APIRouter(prefix="/config", tags=["Configuration"])
 sla_router = APIRouter(prefix="/sla", tags=["SLA"])
 ai_router = APIRouter(prefix="/ai", tags=["AI"])
 dashboard_router = APIRouter(prefix="/dashboard", tags=["Dashboard"])
+topology_router = APIRouter(prefix="/topology", tags=["Topology"])
+ssh_router = APIRouter(prefix="/ssh", tags=["SSH"])
+notifications_router = APIRouter(prefix="/notifications", tags=["Notifications"])
 
 security = HTTPBearer()
 
@@ -457,6 +488,20 @@ async def create_alert(alert_data: AlertCreate, current_user: dict = Depends(get
     alert_dict = alert.model_dump()
     alert_dict["created_at"] = alert_dict["created_at"].isoformat()
     await db.alerts.insert_one(alert_dict)
+    
+    # Send WebSocket notification for critical alerts
+    if alert.severity in [AlertSeverity.CRITICAL, AlertSeverity.HIGH]:
+        await ws_manager.broadcast({
+            "type": "alert",
+            "data": {
+                "id": alert.id,
+                "title": alert.title,
+                "severity": alert.severity.value,
+                "device_name": alert.device_name,
+                "created_at": alert_dict["created_at"]
+            }
+        })
+    
     return alert
 
 @alerts_router.put("/{alert_id}/acknowledge")
@@ -969,6 +1014,229 @@ async def seed_demo_data(current_user: dict = Depends(get_current_user)):
     
     return {"message": "Demo data seeded successfully"}
 
+# ===================== WEBSOCKET ROUTES =====================
+@app.websocket("/ws/alerts")
+async def websocket_alerts(websocket: WebSocket):
+    await ws_manager.connect(websocket)
+    try:
+        while True:
+            # Keep connection alive and listen for pings
+            data = await websocket.receive_text()
+            if data == "ping":
+                await websocket.send_text("pong")
+    except WebSocketDisconnect:
+        ws_manager.disconnect(websocket)
+
+# ===================== TOPOLOGY ROUTES =====================
+@topology_router.get("/data")
+async def get_topology_data(current_user: dict = Depends(get_current_user)):
+    """Get network topology data for visualization"""
+    devices = await db.devices.find({}, {"_id": 0}).to_list(1000)
+    
+    nodes = []
+    links = []
+    
+    # Group devices by location and type
+    location_groups = {}
+    for device in devices:
+        loc = device.get("location", "Unknown")
+        if loc not in location_groups:
+            location_groups[loc] = {"core": [], "edge": [], "servers": [], "cloud": []}
+        
+        device_type = device.get("type", "")
+        node = {
+            "id": device["id"],
+            "name": device["name"],
+            "type": device_type,
+            "status": device.get("status", "unknown"),
+            "ip": device.get("ip_address", ""),
+            "location": loc,
+            "group": loc
+        }
+        nodes.append(node)
+        
+        if device_type in ["router", "switch", "firewall", "load_balancer"]:
+            location_groups[loc]["core"].append(device["id"])
+        elif device_type in ["server", "virtual_machine"]:
+            location_groups[loc]["servers"].append(device["id"])
+        elif device_type == "cloud_instance":
+            location_groups[loc]["cloud"].append(device["id"])
+        else:
+            location_groups[loc]["edge"].append(device["id"])
+    
+    # Create links based on network hierarchy
+    for loc, groups in location_groups.items():
+        # Connect core devices to each other
+        core_devices = groups["core"]
+        for i, device_id in enumerate(core_devices):
+            if i > 0:
+                links.append({"source": core_devices[0], "target": device_id, "type": "core"})
+        
+        # Connect servers to first core device
+        if core_devices:
+            for server_id in groups["servers"]:
+                links.append({"source": core_devices[0], "target": server_id, "type": "server"})
+            for cloud_id in groups["cloud"]:
+                links.append({"source": core_devices[0], "target": cloud_id, "type": "cloud"})
+            for edge_id in groups["edge"]:
+                links.append({"source": core_devices[0], "target": edge_id, "type": "edge"})
+    
+    # Connect different locations through their first core device
+    locations = list(location_groups.keys())
+    for i in range(len(locations) - 1):
+        loc1_core = location_groups[locations[i]]["core"]
+        loc2_core = location_groups[locations[i + 1]]["core"]
+        if loc1_core and loc2_core:
+            links.append({"source": loc1_core[0], "target": loc2_core[0], "type": "wan"})
+    
+    return {"nodes": nodes, "links": links}
+
+# ===================== SSH ROUTES =====================
+class SSHConnectionRequest(BaseModel):
+    device_id: str
+    username: str
+    password: str
+    command: Optional[str] = None
+
+class SSHCommandRequest(BaseModel):
+    device_id: str
+    username: str
+    password: str
+    command: str
+
+@ssh_router.post("/connect")
+async def ssh_connect(request: SSHConnectionRequest, current_user: dict = Depends(get_current_user)):
+    """Test SSH connection to a device"""
+    device = await db.devices.find_one({"id": request.device_id}, {"_id": 0})
+    if not device:
+        raise HTTPException(status_code=404, detail="Device not found")
+    
+    try:
+        ssh_client = paramiko.SSHClient()
+        ssh_client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        ssh_client.connect(
+            hostname=device["ip_address"],
+            username=request.username,
+            password=request.password,
+            timeout=10
+        )
+        ssh_client.close()
+        return {"success": True, "message": f"Successfully connected to {device['name']}"}
+    except paramiko.AuthenticationException:
+        raise HTTPException(status_code=401, detail="Authentication failed")
+    except paramiko.SSHException as e:
+        raise HTTPException(status_code=500, detail=f"SSH error: {str(e)}")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Connection error: {str(e)}")
+
+@ssh_router.post("/execute")
+async def ssh_execute_command(request: SSHCommandRequest, current_user: dict = Depends(get_current_user)):
+    """Execute a command on a device via SSH"""
+    device = await db.devices.find_one({"id": request.device_id}, {"_id": 0})
+    if not device:
+        raise HTTPException(status_code=404, detail="Device not found")
+    
+    try:
+        ssh_client = paramiko.SSHClient()
+        ssh_client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        ssh_client.connect(
+            hostname=device["ip_address"],
+            username=request.username,
+            password=request.password,
+            timeout=10
+        )
+        
+        stdin, stdout, stderr = ssh_client.exec_command(request.command, timeout=30)
+        output = stdout.read().decode('utf-8')
+        error = stderr.read().decode('utf-8')
+        ssh_client.close()
+        
+        return {
+            "success": True,
+            "output": output,
+            "error": error,
+            "device": device["name"]
+        }
+    except paramiko.AuthenticationException:
+        raise HTTPException(status_code=401, detail="Authentication failed")
+    except paramiko.SSHException as e:
+        raise HTTPException(status_code=500, detail=f"SSH error: {str(e)}")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Connection error: {str(e)}")
+
+# ===================== NOTIFICATION ROUTES =====================
+class NotificationSettings(BaseModel):
+    email_enabled: bool = False
+    email_address: Optional[str] = None
+    p1_notify: bool = True
+    p2_notify: bool = True
+    critical_alerts: bool = True
+
+@notifications_router.get("/settings")
+async def get_notification_settings(current_user: dict = Depends(get_current_user)):
+    """Get user notification settings"""
+    settings = await db.notification_settings.find_one({"user_id": current_user["id"]}, {"_id": 0})
+    if not settings:
+        settings = {
+            "user_id": current_user["id"],
+            "email_enabled": False,
+            "email_address": current_user.get("email"),
+            "p1_notify": True,
+            "p2_notify": True,
+            "critical_alerts": True
+        }
+    return settings
+
+@notifications_router.post("/settings")
+async def update_notification_settings(settings: NotificationSettings, current_user: dict = Depends(get_current_user)):
+    """Update user notification settings"""
+    settings_dict = settings.model_dump()
+    settings_dict["user_id"] = current_user["id"]
+    settings_dict["updated_at"] = datetime.now(timezone.utc).isoformat()
+    
+    await db.notification_settings.update_one(
+        {"user_id": current_user["id"]},
+        {"$set": settings_dict},
+        upsert=True
+    )
+    return {"message": "Settings updated"}
+
+@notifications_router.get("/history")
+async def get_notification_history(limit: int = 50, current_user: dict = Depends(get_current_user)):
+    """Get notification history"""
+    notifications = await db.notifications.find(
+        {"user_id": current_user["id"]},
+        {"_id": 0}
+    ).sort("created_at", -1).to_list(limit)
+    return notifications
+
+# Helper function to send notifications
+async def send_notification(title: str, message: str, severity: str, incident_id: Optional[str] = None):
+    """Send notification via WebSocket and store in DB"""
+    notification = {
+        "id": str(uuid.uuid4()),
+        "title": title,
+        "message": message,
+        "severity": severity,
+        "incident_id": incident_id,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "read": False
+    }
+    
+    # Broadcast to all connected WebSocket clients
+    await ws_manager.broadcast({
+        "type": "notification",
+        "data": notification
+    })
+    
+    # Store notification for all users (in production, filter by settings)
+    users = await db.users.find({}, {"_id": 0, "id": 1}).to_list(100)
+    for user in users:
+        user_notification = {**notification, "user_id": user["id"]}
+        await db.notifications.insert_one(user_notification)
+    
+    return notification
+
 # Include all routers
 api_router.include_router(auth_router)
 api_router.include_router(devices_router)
@@ -981,6 +1249,9 @@ api_router.include_router(config_router)
 api_router.include_router(sla_router)
 api_router.include_router(ai_router)
 api_router.include_router(dashboard_router)
+api_router.include_router(topology_router)
+api_router.include_router(ssh_router)
+api_router.include_router(notifications_router)
 
 app.include_router(api_router)
 
