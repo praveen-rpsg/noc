@@ -84,6 +84,33 @@ A comprehensive NOC (Network Operation Center) tool where AI agents act as NOC e
 - ✅ Widget definitions with metric mappings
 - ✅ CRUD for custom dashboards
 
+### Phase 7 - AI Troubleshooting & Device Details (2026-03-20)
+
+#### 1. Right-Click AI Troubleshooting Context Menu
+- ✅ **Incidents Page**: Right-click on any incident row to get AI Troubleshoot option
+- ✅ **Alerts Page**: Right-click on any alert row to get AI Troubleshoot option
+- ✅ AI Troubleshooting Report modal with detailed analysis:
+  - Incident Summary / Alert Assessment
+  - Root Cause Analysis / Probable Cause
+  - Troubleshooting Steps / Commands
+  - Recommended Actions / Resolution Steps
+  - Prevention Measures / Monitoring Recommendations
+  - Escalation Recommendation
+- ✅ Report stored in `troubleshoot_reports` collection
+- API Endpoints:
+  - `POST /api/incidents/{id}/ai-troubleshoot` - Full AI troubleshooting for incident
+  - `POST /api/alerts/{id}/ai-troubleshoot` - Full AI troubleshooting for alert
+
+#### 2. Enhanced Device Details View
+- ✅ **Tabbed Interface**: General, Network, System tabs
+- ✅ **General Tab**: IP Address, MAC Address, Hostname, Location, Vendor, Model, Serial Number
+- ✅ **Network Tab**: CPU/Memory Usage with progress bars, Uptime, AAA Authentication status
+- ✅ **System Tab**: OS Version, OS Install Date, Firmware Version, Warranty Status
+- ✅ **Outdated OS Warning**: Amber badge when OS is >1 year old
+- ✅ **Warranty Status Badges**: Active (green), Expired (red), Expiring Soon (amber)
+- ✅ **AAA Badge**: Purple "AAA" badge for devices with AAA enabled
+- ✅ **Attention Required Section**: Lists warnings for outdated OS and warranty issues
+
 ## New Settings Tabs (Phase 6)
 | Tab | Purpose |
 |-----|---------|
@@ -95,7 +122,7 @@ A comprehensive NOC (Network Operation Center) tool where AI agents act as NOC e
 | AAA | RADIUS/TACACS+ authentication |
 | Backup | Scheduled backups with TFTP/SCP/SSH/API |
 
-## New API Endpoints (Phase 6)
+## New API Endpoints (Phase 6 & 7)
 ### Settings
 - `/api/settings/openstack` - OpenStack CRUD
 - `/api/settings/oracle` - Oracle DB CRUD
@@ -110,10 +137,9 @@ A comprehensive NOC (Network Operation Center) tool where AI agents act as NOC e
 - `/api/reports/{id}/download/pdf` - PDF download
 - `/api/reports/{id}/download/csv` - CSV download
 
-### AI Incident Resolution
-- `/api/ai/incidents/{id}/analyze` - AI analysis
-- `/api/ai/incidents/actions/{id}/confirm` - Confirm/reject
-- `/api/ai/incidents/actions/pending` - Pending actions
+### AI Troubleshooting (Phase 7 - NEW)
+- `/api/incidents/{id}/ai-troubleshoot` - AI troubleshooting report for incident
+- `/api/alerts/{id}/ai-troubleshoot` - AI troubleshooting report for alert
 
 ## Database Collections (New)
 - `openstack_config` - OpenStack settings
@@ -124,6 +150,25 @@ A comprehensive NOC (Network Operation Center) tool where AI agents act as NOC e
 - `backup_jobs` - Backup job history
 - `custom_dashboards` - User dashboards
 - `incident_actions` - AI action tracking
+- `troubleshoot_reports` - AI troubleshooting reports (Phase 7)
+
+## Device Model (Enhanced - Phase 7)
+```python
+Device:
+  - id, name, type, ip_address, location, status
+  - vendor, model, serial_number, firmware_version
+  - config_url, last_seen, cpu_usage, memory_usage, uptime_hours
+  - tags, created_at
+  # NEW Fields (Phase 7)
+  - mac_address: Optional[str]
+  - hostname: Optional[str]
+  - os_version: Optional[str]
+  - os_install_date: Optional[str]  # For >1 year check
+  - warranty_status: Optional[str]  # active, expired, expiring_soon
+  - warranty_expiry: Optional[str]
+  - aaa_enabled: bool
+  - device_description: Optional[str]
+```
 
 ## Pending/Future Items
 1. 🟡 Implement actual SNMP polling with pysnmp
