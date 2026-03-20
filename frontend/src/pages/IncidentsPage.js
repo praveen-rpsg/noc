@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
 import { Button } from '../components/ui/button';
 import { Badge } from '../components/ui/badge';
@@ -22,7 +22,9 @@ import {
   CheckCircle,
   AlertTriangle,
   ArrowUpRight,
-  Loader2
+  Loader2,
+  Wrench,
+  X
 } from 'lucide-react';
 import { format } from 'date-fns';
 
@@ -77,8 +79,14 @@ export default function IncidentsPage() {
   const [selectedIncident, setSelectedIncident] = useState(null);
   const [formData, setFormData] = useState(initialFormState);
   const [aiLoading, setAiLoading] = useState(false);
+  
+  // Context menu state
+  const [contextMenu, setContextMenu] = useState({ visible: false, x: 0, y: 0, incident: null });
+  const [isTroubleshootOpen, setIsTroubleshootOpen] = useState(false);
+  const [troubleshootResult, setTroubleshootResult] = useState(null);
+  const [troubleshootLoading, setTroubleshootLoading] = useState(false);
 
-  const fetchData = async () => {
+  const fetchData = useCallback(async () => {
     try {
       const [incidentsRes, devicesRes] = await Promise.all([
         incidentsApi.getAll(),
@@ -91,11 +99,54 @@ export default function IncidentsPage() {
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
 
   useEffect(() => {
     fetchData();
+  }, [fetchData]);
+  
+  // Close context menu on click outside
+  useEffect(() => {
+    const handleClick = () => setContextMenu({ visible: false, x: 0, y: 0, incident: null });
+    document.addEventListener('click', handleClick);
+    return () => document.removeEventListener('click', handleClick);
   }, []);
+
+  const handleContextMenu = (e, incident) => {
+    e.preventDefault();
+    setContextMenu({
+      visible: true,
+      x: e.clientX,
+      y: e.clientY,
+      incident
+    });
+  };
+
+  const handleAiTroubleshoot = async (incident) => {
+    setContextMenu({ visible: false, x: 0, y: 0, incident: null });
+    setTroubleshootLoading(true);
+    setTroubleshootResult(null);
+    setIsTroubleshootOpen(true);
+    
+    try {
+      const response = await incidentsApi.aiTroubleshoot(incident.id);
+      setTroubleshootResult({
+        incident,
+        ...response.data
+      });
+      toast.success('AI troubleshooting complete');
+      fetchData(); // Refresh to get updated incident status
+    } catch (error) {
+      toast.error('Failed to run AI troubleshooting');
+      setTroubleshootResult({
+        incident,
+        analysis: 'Error: Failed to get AI analysis. Please try again.',
+        error: true
+      });
+    } finally {
+      setTroubleshootLoading(false);
+    }
+  };
 
   const filteredIncidents = incidents.filter((incident) => {
     const matchesSearch = incident.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -375,6 +426,7 @@ export default function IncidentsPage() {
                       key={incident.id} 
                       className="table-row-hover cursor-pointer" 
                       onClick={() => openDetailDialog(incident)}
+                      onContextMenu={(e) => handleContextMenu(e, incident)}
                       data-testid={`incident-row-${incident.id}`}
                     >
                       <TableCell className="font-mono text-sm">{incident.ticket_number}</TableCell>
@@ -546,6 +598,113 @@ export default function IncidentsPage() {
               </TabsContent>
             </Tabs>
           )}
+        </DialogContent>
+      </Dialog>
+
+      {/* Context Menu */}
+      {contextMenu.visible && (
+        <div 
+          className="fixed z-50 bg-white rounded-lg shadow-lg border border-border/50 py-2 min-w-[200px]"
+          style={{ 
+            left: Math.min(contextMenu.x, window.innerWidth - 220),
+            top: Math.min(contextMenu.y, window.innerHeight - 120)
+          }}
+          data-testid="incident-context-menu"
+        >
+          <button
+            className="w-full px-4 py-2 text-left hover:bg-purple-50 flex items-center gap-2 text-sm"
+            onClick={() => handleAiTroubleshoot(contextMenu.incident)}
+            data-testid="context-menu-troubleshoot"
+          >
+            <Brain className="h-4 w-4 text-purple-600" />
+            <span className="font-medium">AI Troubleshoot</span>
+          </button>
+          <button
+            className="w-full px-4 py-2 text-left hover:bg-slate-50 flex items-center gap-2 text-sm"
+            onClick={() => {
+              openDetailDialog(contextMenu.incident);
+              setContextMenu({ visible: false, x: 0, y: 0, incident: null });
+            }}
+            data-testid="context-menu-view-details"
+          >
+            <ArrowUpRight className="h-4 w-4 text-slate-600" />
+            <span>View Details</span>
+          </button>
+          {contextMenu.incident?.status === 'open' && (
+            <button
+              className="w-full px-4 py-2 text-left hover:bg-blue-50 flex items-center gap-2 text-sm"
+              onClick={() => {
+                handleStatusUpdate(contextMenu.incident.id, 'in_progress');
+                setContextMenu({ visible: false, x: 0, y: 0, incident: null });
+              }}
+              data-testid="context-menu-start-working"
+            >
+              <Wrench className="h-4 w-4 text-blue-600" />
+              <span>Start Working</span>
+            </button>
+          )}
+        </div>
+      )}
+
+      {/* AI Troubleshoot Modal */}
+      <Dialog open={isTroubleshootOpen} onOpenChange={setIsTroubleshootOpen}>
+        <DialogContent className="sm:max-w-[900px] max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="p-2 bg-purple-100 rounded-lg">
+                  <Brain className="h-5 w-5 text-purple-600" />
+                </div>
+                <div>
+                  <DialogTitle>AI Troubleshooting Report</DialogTitle>
+                  {troubleshootResult?.incident && (
+                    <p className="text-sm text-muted-foreground mt-1">
+                      {troubleshootResult.incident.ticket_number} - {troubleshootResult.incident.title}
+                    </p>
+                  )}
+                </div>
+              </div>
+            </div>
+          </DialogHeader>
+          
+          <div className="mt-4">
+            {troubleshootLoading ? (
+              <div className="flex flex-col items-center justify-center py-12">
+                <Loader2 className="h-12 w-12 animate-spin text-purple-600 mb-4" />
+                <p className="text-lg font-medium">AI Agent is analyzing...</p>
+                <p className="text-sm text-muted-foreground">Gathering incident data and generating troubleshooting report</p>
+              </div>
+            ) : troubleshootResult ? (
+              <div className="space-y-4">
+                <div className="flex items-center justify-between text-sm text-muted-foreground">
+                  <span>Report ID: {troubleshootResult.report_id}</span>
+                  <span>Generated: {troubleshootResult.created_at ? format(new Date(troubleshootResult.created_at), 'PPpp') : 'N/A'}</span>
+                </div>
+                
+                <Card className={`${troubleshootResult.error ? 'bg-red-50 border-red-200' : 'bg-slate-50 border-slate-200'}`}>
+                  <CardContent className="p-4">
+                    <pre className="whitespace-pre-wrap text-sm font-sans leading-relaxed">
+                      {troubleshootResult.analysis}
+                    </pre>
+                  </CardContent>
+                </Card>
+                
+                <div className="flex justify-end gap-2 pt-4">
+                  <Button variant="outline" onClick={() => setIsTroubleshootOpen(false)}>
+                    Close
+                  </Button>
+                  {troubleshootResult.incident && (
+                    <Button onClick={() => {
+                      setIsTroubleshootOpen(false);
+                      openDetailDialog(troubleshootResult.incident);
+                    }}>
+                      View Incident
+                    </Button>
+                  )}
+                </div>
+              </div>
+            ) : null}
+          </div>
         </DialogContent>
       </Dialog>
     </div>

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
 import { Button } from '../components/ui/button';
 import { Badge } from '../components/ui/badge';
@@ -8,6 +8,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '.
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogFooter } from '../components/ui/dialog';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table';
 import { ScrollArea } from '../components/ui/scroll-area';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
 import { devicesApi } from '../services/api';
 import { toast } from 'sonner';
 import {
@@ -23,7 +24,12 @@ import {
   MoreVertical,
   Pencil,
   Trash2,
-  Eye
+  Eye,
+  AlertTriangle,
+  CheckCircle,
+  XCircle,
+  ShieldCheck,
+  Clock
 } from 'lucide-react';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '../components/ui/dropdown-menu';
 
@@ -64,6 +70,39 @@ const DeviceTypeIcon = ({ type }) => {
   return <Icon className="h-5 w-5 text-muted-foreground" />;
 };
 
+// Helper to check if OS is older than 1 year
+const isOsOutdated = (osInstallDate) => {
+  if (!osInstallDate) return false;
+  const installDate = new Date(osInstallDate);
+  const oneYearAgo = new Date();
+  oneYearAgo.setFullYear(oneYearAgo.getFullYear() - 1);
+  return installDate < oneYearAgo;
+};
+
+// Helper to get warranty status badge
+const WarrantyBadge = ({ status, expiry }) => {
+  const styles = {
+    active: 'bg-green-50 text-green-700 border-green-200',
+    expired: 'bg-red-50 text-red-700 border-red-200',
+    expiring_soon: 'bg-amber-50 text-amber-700 border-amber-200',
+    unknown: 'bg-slate-50 text-slate-700 border-slate-200',
+  };
+  
+  const icons = {
+    active: <CheckCircle className="h-3 w-3 mr-1" />,
+    expired: <XCircle className="h-3 w-3 mr-1" />,
+    expiring_soon: <AlertTriangle className="h-3 w-3 mr-1" />,
+    unknown: <Clock className="h-3 w-3 mr-1" />,
+  };
+  
+  return (
+    <Badge variant="outline" className={`${styles[status] || styles.unknown} capitalize`}>
+      {icons[status] || icons.unknown}
+      {status?.replace('_', ' ') || 'Unknown'}
+    </Badge>
+  );
+};
+
 const initialFormState = {
   name: '',
   type: 'server',
@@ -88,7 +127,7 @@ export default function MonitoringPage() {
   const [selectedDevice, setSelectedDevice] = useState(null);
   const [formData, setFormData] = useState(initialFormState);
 
-  const fetchDevices = async () => {
+  const fetchDevices = useCallback(async () => {
     try {
       const response = await devicesApi.getAll();
       setDevices(response.data);
@@ -97,11 +136,11 @@ export default function MonitoringPage() {
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
 
   useEffect(() => {
     fetchDevices();
-  }, []);
+  }, [fetchDevices]);
 
   const filteredDevices = devices.filter((device) => {
     const matchesSearch = device.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -529,54 +568,193 @@ export default function MonitoringPage() {
 
       {/* View Dialog */}
       <Dialog open={isViewOpen} onOpenChange={setIsViewOpen}>
-        <DialogContent className="sm:max-w-[500px]">
+        <DialogContent className="sm:max-w-[700px] max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>Device Details</DialogTitle>
           </DialogHeader>
           {selectedDevice && (
             <div className="space-y-4">
-              <div className="flex items-center gap-4">
+              {/* Header */}
+              <div className="flex items-center gap-4 pb-4 border-b">
                 <div className="p-4 rounded-xl bg-muted">
                   <DeviceTypeIcon type={selectedDevice.type} />
                 </div>
-                <div>
+                <div className="flex-1">
                   <h3 className="font-semibold text-lg">{selectedDevice.name}</h3>
                   <p className="text-muted-foreground capitalize">{selectedDevice.type.replace('_', ' ')}</p>
+                  {selectedDevice.hostname && (
+                    <p className="text-xs text-muted-foreground font-mono">{selectedDevice.hostname}</p>
+                  )}
                 </div>
-                <div className="ml-auto">
+                <div className="text-right">
                   <StatusBadge status={selectedDevice.status} />
+                  {selectedDevice.aaa_enabled && (
+                    <Badge variant="outline" className="ml-2 bg-purple-50 text-purple-700 border-purple-200">
+                      <ShieldCheck className="h-3 w-3 mr-1" />
+                      AAA
+                    </Badge>
+                  )}
                 </div>
               </div>
-              <div className="grid grid-cols-2 gap-4 text-sm">
-                <div>
-                  <p className="text-muted-foreground">IP Address</p>
-                  <p className="font-mono">{selectedDevice.ip_address}</p>
-                </div>
-                <div>
-                  <p className="text-muted-foreground">Location</p>
-                  <p>{selectedDevice.location}</p>
-                </div>
-                <div>
-                  <p className="text-muted-foreground">Vendor</p>
-                  <p>{selectedDevice.vendor || 'N/A'}</p>
-                </div>
-                <div>
-                  <p className="text-muted-foreground">Model</p>
-                  <p>{selectedDevice.model || 'N/A'}</p>
-                </div>
-                <div>
-                  <p className="text-muted-foreground">CPU Usage</p>
-                  <p>{Math.round(selectedDevice.cpu_usage)}%</p>
-                </div>
-                <div>
-                  <p className="text-muted-foreground">Memory Usage</p>
-                  <p>{Math.round(selectedDevice.memory_usage)}%</p>
-                </div>
-                <div>
-                  <p className="text-muted-foreground">Uptime</p>
-                  <p>{selectedDevice.uptime_hours} hours</p>
-                </div>
-              </div>
+              
+              <Tabs defaultValue="general" className="w-full">
+                <TabsList className="grid w-full grid-cols-3">
+                  <TabsTrigger value="general">General</TabsTrigger>
+                  <TabsTrigger value="network">Network</TabsTrigger>
+                  <TabsTrigger value="system">System</TabsTrigger>
+                </TabsList>
+                
+                <TabsContent value="general" className="mt-4 space-y-4">
+                  <div className="grid grid-cols-2 gap-4 text-sm">
+                    <div>
+                      <p className="text-muted-foreground">IP Address</p>
+                      <p className="font-mono font-medium">{selectedDevice.ip_address}</p>
+                    </div>
+                    <div>
+                      <p className="text-muted-foreground">MAC Address</p>
+                      <p className="font-mono">{selectedDevice.mac_address || 'N/A'}</p>
+                    </div>
+                    <div>
+                      <p className="text-muted-foreground">Hostname</p>
+                      <p className="font-mono text-xs">{selectedDevice.hostname || 'N/A'}</p>
+                    </div>
+                    <div>
+                      <p className="text-muted-foreground">Location</p>
+                      <p>{selectedDevice.location}</p>
+                    </div>
+                    <div>
+                      <p className="text-muted-foreground">Vendor</p>
+                      <p>{selectedDevice.vendor || 'N/A'}</p>
+                    </div>
+                    <div>
+                      <p className="text-muted-foreground">Model</p>
+                      <p>{selectedDevice.model || 'N/A'}</p>
+                    </div>
+                    <div>
+                      <p className="text-muted-foreground">Serial Number</p>
+                      <p className="font-mono">{selectedDevice.serial_number || 'N/A'}</p>
+                    </div>
+                    {selectedDevice.device_description && (
+                      <div className="col-span-2">
+                        <p className="text-muted-foreground">Description</p>
+                        <p>{selectedDevice.device_description}</p>
+                      </div>
+                    )}
+                  </div>
+                </TabsContent>
+                
+                <TabsContent value="network" className="mt-4 space-y-4">
+                  <div className="grid grid-cols-2 gap-4 text-sm">
+                    <div>
+                      <p className="text-muted-foreground">CPU Usage</p>
+                      <div className="flex items-center gap-2 mt-1">
+                        <div className="flex-1 bg-muted rounded-full h-2">
+                          <div 
+                            className={`h-2 rounded-full ${selectedDevice.cpu_usage > 80 ? 'bg-red-500' : selectedDevice.cpu_usage > 60 ? 'bg-amber-500' : 'bg-green-500'}`}
+                            style={{ width: `${selectedDevice.cpu_usage}%` }}
+                          />
+                        </div>
+                        <span className="font-medium">{Math.round(selectedDevice.cpu_usage)}%</span>
+                      </div>
+                    </div>
+                    <div>
+                      <p className="text-muted-foreground">Memory Usage</p>
+                      <div className="flex items-center gap-2 mt-1">
+                        <div className="flex-1 bg-muted rounded-full h-2">
+                          <div 
+                            className={`h-2 rounded-full ${selectedDevice.memory_usage > 80 ? 'bg-red-500' : selectedDevice.memory_usage > 60 ? 'bg-amber-500' : 'bg-green-500'}`}
+                            style={{ width: `${selectedDevice.memory_usage}%` }}
+                          />
+                        </div>
+                        <span className="font-medium">{Math.round(selectedDevice.memory_usage)}%</span>
+                      </div>
+                    </div>
+                    <div>
+                      <p className="text-muted-foreground">Uptime</p>
+                      <p className="font-medium">{selectedDevice.uptime_hours} hours</p>
+                    </div>
+                    <div>
+                      <p className="text-muted-foreground">AAA Authentication</p>
+                      <div className="mt-1">
+                        {selectedDevice.aaa_enabled ? (
+                          <Badge variant="outline" className="bg-green-50 text-green-700 border-green-200">
+                            <ShieldCheck className="h-3 w-3 mr-1" />
+                            Enabled
+                          </Badge>
+                        ) : (
+                          <Badge variant="outline" className="bg-slate-50 text-slate-700 border-slate-200">
+                            Disabled
+                          </Badge>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                </TabsContent>
+                
+                <TabsContent value="system" className="mt-4 space-y-4">
+                  {/* OS Version with outdated warning */}
+                  <div className="p-4 rounded-lg border bg-slate-50/50">
+                    <div className="flex items-start justify-between">
+                      <div>
+                        <p className="text-muted-foreground text-sm">Operating System</p>
+                        <p className="font-medium">{selectedDevice.os_version || 'N/A'}</p>
+                        {selectedDevice.os_install_date && (
+                          <p className="text-xs text-muted-foreground mt-1">
+                            Installed: {selectedDevice.os_install_date}
+                          </p>
+                        )}
+                      </div>
+                      {isOsOutdated(selectedDevice.os_install_date) && (
+                        <Badge variant="outline" className="bg-amber-50 text-amber-700 border-amber-200">
+                          <AlertTriangle className="h-3 w-3 mr-1" />
+                          Outdated (&gt;1 year)
+                        </Badge>
+                      )}
+                    </div>
+                  </div>
+                  
+                  <div className="grid grid-cols-2 gap-4 text-sm">
+                    <div>
+                      <p className="text-muted-foreground">Firmware Version</p>
+                      <p className="font-mono">{selectedDevice.firmware_version || 'N/A'}</p>
+                    </div>
+                    <div>
+                      <p className="text-muted-foreground">Warranty Status</p>
+                      <div className="mt-1">
+                        <WarrantyBadge status={selectedDevice.warranty_status} expiry={selectedDevice.warranty_expiry} />
+                        {selectedDevice.warranty_expiry && (
+                          <p className="text-xs text-muted-foreground mt-1">
+                            Expires: {selectedDevice.warranty_expiry}
+                          </p>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                  
+                  {/* Alerts section */}
+                  {(isOsOutdated(selectedDevice.os_install_date) || selectedDevice.warranty_status === 'expired' || selectedDevice.warranty_status === 'expiring_soon') && (
+                    <Card className="border-amber-200 bg-amber-50/50">
+                      <CardContent className="p-4">
+                        <div className="flex items-center gap-2 text-amber-700 mb-2">
+                          <AlertTriangle className="h-4 w-4" />
+                          <span className="font-medium">Attention Required</span>
+                        </div>
+                        <ul className="text-sm text-amber-700 space-y-1 list-disc list-inside">
+                          {isOsOutdated(selectedDevice.os_install_date) && (
+                            <li>Operating system is over 1 year old - consider updating</li>
+                          )}
+                          {selectedDevice.warranty_status === 'expired' && (
+                            <li>Device warranty has expired</li>
+                          )}
+                          {selectedDevice.warranty_status === 'expiring_soon' && (
+                            <li>Device warranty is expiring soon - consider renewal</li>
+                          )}
+                        </ul>
+                      </CardContent>
+                    </Card>
+                  )}
+                </TabsContent>
+              </Tabs>
             </div>
           )}
         </DialogContent>

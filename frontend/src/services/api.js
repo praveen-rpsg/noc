@@ -15,9 +15,11 @@ export const devicesApi = {
 // Alerts API
 export const alertsApi = {
   getAll: (params) => axios.get(`${API}/alerts`, { params }),
+  getOne: (id) => axios.get(`${API}/alerts/${id}`),
   create: (data) => axios.post(`${API}/alerts`, data),
   acknowledge: (id) => axios.put(`${API}/alerts/${id}/acknowledge`),
   resolve: (id) => axios.put(`${API}/alerts/${id}/resolve`),
+  aiTroubleshoot: (id) => axios.post(`${API}/alerts/${id}/ai-troubleshoot`),
 };
 
 // Incidents API
@@ -27,6 +29,7 @@ export const incidentsApi = {
   create: (data) => axios.post(`${API}/incidents`, data),
   update: (id, data) => axios.put(`${API}/incidents/${id}`, data),
   getAiAnalysis: (id) => axios.post(`${API}/incidents/${id}/ai-analysis`),
+  aiTroubleshoot: (id) => axios.post(`${API}/incidents/${id}/ai-troubleshoot`),
 };
 
 // Performance API

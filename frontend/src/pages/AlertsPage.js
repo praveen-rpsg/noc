@@ -1,9 +1,10 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
 import { Button } from '../components/ui/button';
 import { Badge } from '../components/ui/badge';
 import { Input } from '../components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '../components/ui/dialog';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table';
 import { ScrollArea } from '../components/ui/scroll-area';
 import { alertsApi } from '../services/api';
@@ -16,7 +17,10 @@ import {
   Search,
   RefreshCw,
   Filter,
-  Eye
+  Eye,
+  Brain,
+  Loader2,
+  ArrowUpRight
 } from 'lucide-react';
 import { format } from 'date-fns';
 
@@ -57,8 +61,14 @@ export default function AlertsPage() {
   const [searchQuery, setSearchQuery] = useState('');
   const [filterSeverity, setFilterSeverity] = useState('all');
   const [filterStatus, setFilterStatus] = useState('all');
+  
+  // Context menu state
+  const [contextMenu, setContextMenu] = useState({ visible: false, x: 0, y: 0, alert: null });
+  const [isTroubleshootOpen, setIsTroubleshootOpen] = useState(false);
+  const [troubleshootResult, setTroubleshootResult] = useState(null);
+  const [troubleshootLoading, setTroubleshootLoading] = useState(false);
 
-  const fetchAlerts = async () => {
+  const fetchAlerts = useCallback(async () => {
     try {
       const params = {};
       if (filterStatus !== 'all') params.status = filterStatus;
@@ -70,11 +80,53 @@ export default function AlertsPage() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [filterStatus, filterSeverity]);
 
   useEffect(() => {
     fetchAlerts();
-  }, [filterStatus, filterSeverity]);
+  }, [fetchAlerts]);
+  
+  // Close context menu on click outside
+  useEffect(() => {
+    const handleClick = () => setContextMenu({ visible: false, x: 0, y: 0, alert: null });
+    document.addEventListener('click', handleClick);
+    return () => document.removeEventListener('click', handleClick);
+  }, []);
+
+  const handleContextMenu = (e, alert) => {
+    e.preventDefault();
+    setContextMenu({
+      visible: true,
+      x: e.clientX,
+      y: e.clientY,
+      alert
+    });
+  };
+
+  const handleAiTroubleshoot = async (alert) => {
+    setContextMenu({ visible: false, x: 0, y: 0, alert: null });
+    setTroubleshootLoading(true);
+    setTroubleshootResult(null);
+    setIsTroubleshootOpen(true);
+    
+    try {
+      const response = await alertsApi.aiTroubleshoot(alert.id);
+      setTroubleshootResult({
+        alert,
+        ...response.data
+      });
+      toast.success('AI troubleshooting complete');
+    } catch (error) {
+      toast.error('Failed to run AI troubleshooting');
+      setTroubleshootResult({
+        alert,
+        analysis: 'Error: Failed to get AI analysis. Please try again.',
+        error: true
+      });
+    } finally {
+      setTroubleshootLoading(false);
+    }
+  };
 
   const handleAcknowledge = async (alertId) => {
     try {
@@ -244,7 +296,12 @@ export default function AlertsPage() {
                   </TableRow>
                 ) : (
                   filteredAlerts.map((alert) => (
-                    <TableRow key={alert.id} className="table-row-hover" data-testid={`alert-row-${alert.id}`}>
+                    <TableRow 
+                      key={alert.id} 
+                      className="table-row-hover cursor-pointer" 
+                      onContextMenu={(e) => handleContextMenu(e, alert)}
+                      data-testid={`alert-row-${alert.id}`}
+                    >
                       <TableCell>
                         <SeverityBadge severity={alert.severity} />
                       </TableCell>
@@ -302,6 +359,112 @@ export default function AlertsPage() {
           </ScrollArea>
         </CardContent>
       </Card>
+
+      {/* Context Menu */}
+      {contextMenu.visible && (
+        <div 
+          className="fixed z-50 bg-white rounded-lg shadow-lg border border-border/50 py-2 min-w-[200px]"
+          style={{ 
+            left: Math.min(contextMenu.x, window.innerWidth - 220),
+            top: Math.min(contextMenu.y, window.innerHeight - 150)
+          }}
+          data-testid="alert-context-menu"
+        >
+          <button
+            className="w-full px-4 py-2 text-left hover:bg-purple-50 flex items-center gap-2 text-sm"
+            onClick={() => handleAiTroubleshoot(contextMenu.alert)}
+            data-testid="context-menu-troubleshoot"
+          >
+            <Brain className="h-4 w-4 text-purple-600" />
+            <span className="font-medium">AI Troubleshoot</span>
+          </button>
+          {contextMenu.alert?.status === 'active' && (
+            <button
+              className="w-full px-4 py-2 text-left hover:bg-amber-50 flex items-center gap-2 text-sm"
+              onClick={() => {
+                handleAcknowledge(contextMenu.alert.id);
+                setContextMenu({ visible: false, x: 0, y: 0, alert: null });
+              }}
+              data-testid="context-menu-acknowledge"
+            >
+              <Eye className="h-4 w-4 text-amber-600" />
+              <span>Acknowledge</span>
+            </button>
+          )}
+          {contextMenu.alert?.status !== 'resolved' && (
+            <button
+              className="w-full px-4 py-2 text-left hover:bg-green-50 flex items-center gap-2 text-sm"
+              onClick={() => {
+                handleResolve(contextMenu.alert.id);
+                setContextMenu({ visible: false, x: 0, y: 0, alert: null });
+              }}
+              data-testid="context-menu-resolve"
+            >
+              <CheckCircle className="h-4 w-4 text-green-600" />
+              <span>Resolve</span>
+            </button>
+          )}
+        </div>
+      )}
+
+      {/* AI Troubleshoot Modal */}
+      <Dialog open={isTroubleshootOpen} onOpenChange={setIsTroubleshootOpen}>
+        <DialogContent className="sm:max-w-[900px] max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <div className="flex items-center gap-3">
+              <div className="p-2 bg-purple-100 rounded-lg">
+                <Brain className="h-5 w-5 text-purple-600" />
+              </div>
+              <div>
+                <DialogTitle>AI Troubleshooting Report</DialogTitle>
+                {troubleshootResult?.alert && (
+                  <p className="text-sm text-muted-foreground mt-1">
+                    {troubleshootResult.alert.title} - {troubleshootResult.alert.device_name}
+                  </p>
+                )}
+              </div>
+            </div>
+          </DialogHeader>
+          
+          <div className="mt-4">
+            {troubleshootLoading ? (
+              <div className="flex flex-col items-center justify-center py-12">
+                <Loader2 className="h-12 w-12 animate-spin text-purple-600 mb-4" />
+                <p className="text-lg font-medium">AI Agent is analyzing...</p>
+                <p className="text-sm text-muted-foreground">Gathering alert data and generating troubleshooting report</p>
+              </div>
+            ) : troubleshootResult ? (
+              <div className="space-y-4">
+                <div className="flex items-center justify-between text-sm text-muted-foreground">
+                  <span>Report ID: {troubleshootResult.report_id}</span>
+                  <span>Generated: {troubleshootResult.created_at ? format(new Date(troubleshootResult.created_at), 'PPpp') : 'N/A'}</span>
+                </div>
+                
+                {troubleshootResult.alert && (
+                  <div className="flex gap-2">
+                    <SeverityBadge severity={troubleshootResult.alert.severity} />
+                    <StatusBadge status={troubleshootResult.alert.status} />
+                  </div>
+                )}
+                
+                <Card className={`${troubleshootResult.error ? 'bg-red-50 border-red-200' : 'bg-slate-50 border-slate-200'}`}>
+                  <CardContent className="p-4">
+                    <pre className="whitespace-pre-wrap text-sm font-sans leading-relaxed">
+                      {troubleshootResult.analysis}
+                    </pre>
+                  </CardContent>
+                </Card>
+                
+                <DialogFooter>
+                  <Button variant="outline" onClick={() => setIsTroubleshootOpen(false)}>
+                    Close
+                  </Button>
+                </DialogFooter>
+              </div>
+            ) : null}
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

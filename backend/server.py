@@ -192,6 +192,15 @@ class Device(BaseModel):
     uptime_hours: int = 0
     tags: List[str] = []
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    # Enhanced device details
+    mac_address: Optional[str] = None
+    hostname: Optional[str] = None
+    os_version: Optional[str] = None
+    os_install_date: Optional[str] = None  # ISO date string
+    warranty_status: Optional[str] = None  # "active", "expired", "expiring_soon", "unknown"
+    warranty_expiry: Optional[str] = None  # ISO date string
+    aaa_enabled: bool = False
+    device_description: Optional[str] = None
 
 class DeviceCreate(BaseModel):
     name: str
@@ -204,6 +213,15 @@ class DeviceCreate(BaseModel):
     firmware_version: Optional[str] = None
     config_url: Optional[str] = None  # URL to device configuration page
     tags: List[str] = []
+    # Enhanced device details
+    mac_address: Optional[str] = None
+    hostname: Optional[str] = None
+    os_version: Optional[str] = None
+    os_install_date: Optional[str] = None
+    warranty_status: Optional[str] = None
+    warranty_expiry: Optional[str] = None
+    aaa_enabled: bool = False
+    device_description: Optional[str] = None
 
 class Alert(BaseModel):
     model_config = ConfigDict(extra="ignore")
@@ -891,6 +909,98 @@ async def resolve_alert(alert_id: str, current_user: dict = Depends(get_current_
         raise HTTPException(status_code=404, detail="Alert not found")
     return {"message": "Alert resolved"}
 
+@alerts_router.get("/{alert_id}")
+async def get_alert(alert_id: str, current_user: dict = Depends(get_current_user)):
+    """Get a single alert by ID"""
+    alert = await db.alerts.find_one({"id": alert_id}, {"_id": 0})
+    if not alert:
+        raise HTTPException(status_code=404, detail="Alert not found")
+    return Alert(**serialize_doc(alert))
+
+@alerts_router.post("/{alert_id}/ai-troubleshoot")
+async def ai_troubleshoot_alert(alert_id: str, current_user: dict = Depends(get_current_user)):
+    """AI Agent analyzes an alert and provides troubleshooting recommendations"""
+    alert = await db.alerts.find_one({"id": alert_id}, {"_id": 0})
+    if not alert:
+        raise HTTPException(status_code=404, detail="Alert not found")
+    
+    # Get device details
+    device = await db.devices.find_one({"id": alert.get('device_id')}, {"_id": 0})
+    device_info = ""
+    if device:
+        device_info = f"""
+=== DEVICE INFORMATION ===
+Name: {device.get('name', 'N/A')}
+Type: {device.get('type', 'N/A')}
+IP Address: {device.get('ip_address', 'N/A')}
+Location: {device.get('location', 'N/A')}
+Vendor: {device.get('vendor', 'N/A')}
+Model: {device.get('model', 'N/A')}
+Status: {device.get('status', 'N/A')}
+CPU Usage: {device.get('cpu_usage', 'N/A')}%
+Memory Usage: {device.get('memory_usage', 'N/A')}%
+"""
+    
+    # Get recent performance metrics for the device
+    recent_metrics = await db.performance_metrics.find(
+        {"device_id": alert.get('device_id')},
+        {"_id": 0}
+    ).sort("timestamp", -1).to_list(5)
+    
+    metrics_summary = ""
+    if recent_metrics:
+        metrics_summary = "\n=== RECENT PERFORMANCE METRICS ===\n"
+        for m in recent_metrics[:3]:
+            metrics_summary += f"- CPU: {m.get('cpu_usage', 0):.1f}%, Memory: {m.get('memory_usage', 0):.1f}%, Latency: {m.get('latency_ms', 0):.1f}ms\n"
+    
+    context = f"""
+=== ALERT DETAILS ===
+Title: {alert.get('title', 'N/A')}
+Description: {alert.get('description', 'N/A')}
+Severity: {alert.get('severity', 'N/A').upper()}
+Status: {alert.get('status', 'N/A')}
+Device: {alert.get('device_name', 'N/A')}
+Metric: {alert.get('metric_name', 'N/A')}
+Value: {alert.get('metric_value', 'N/A')}
+Threshold: {alert.get('threshold', 'N/A')}
+Created: {alert.get('created_at', 'N/A')}
+{device_info}
+{metrics_summary}
+"""
+    
+    analysis = await get_ai_analysis(
+        context,
+        """You are an expert NOC AI Agent. Analyze this alert and provide a comprehensive troubleshooting report with:
+
+1. **ALERT ASSESSMENT**: Severity evaluation and impact analysis
+2. **PROBABLE CAUSE**: What likely caused this alert
+3. **IMMEDIATE ACTIONS**: Steps to take right now
+4. **TROUBLESHOOTING COMMANDS**: Specific CLI commands or checks to run
+5. **RESOLUTION STEPS**: How to resolve the underlying issue
+6. **MONITORING RECOMMENDATIONS**: What to watch after resolution
+7. **SHOULD CREATE INCIDENT**: Yes/No with reasoning
+
+Be specific to the device type and alert nature."""
+    )
+    
+    # Store the troubleshooting report
+    troubleshoot_report = {
+        "id": str(uuid.uuid4()),
+        "alert_id": alert_id,
+        "analysis": analysis,
+        "triggered_by": current_user["name"],
+        "created_at": datetime.now(timezone.utc).isoformat()
+    }
+    await db.troubleshoot_reports.insert_one(troubleshoot_report)
+    
+    return {
+        "report_id": troubleshoot_report["id"],
+        "alert_id": alert_id,
+        "analysis": analysis,
+        "triggered_by": current_user["name"],
+        "created_at": troubleshoot_report["created_at"]
+    }
+
 # ===================== INCIDENT ROUTES =====================
 @incidents_router.get("", response_model=List[Incident])
 async def get_incidents(status: Optional[str] = None, priority: Optional[str] = None, current_user: dict = Depends(get_current_user)):
@@ -972,6 +1082,92 @@ Affected Devices: {', '.join(incident.get('affected_devices', []))}
     )
     
     return {"analysis": analysis}
+
+@incidents_router.post("/{incident_id}/ai-troubleshoot")
+async def ai_troubleshoot_incident(incident_id: str, current_user: dict = Depends(get_current_user)):
+    """AI Agent starts troubleshooting an incident and provides a detailed report"""
+    incident = await db.incidents.find_one({"id": incident_id}, {"_id": 0})
+    if not incident:
+        raise HTTPException(status_code=404, detail="Incident not found")
+    
+    # Get affected device details
+    device_details = []
+    for device_id in incident.get('affected_devices', []):
+        device = await db.devices.find_one({"id": device_id}, {"_id": 0})
+        if device:
+            device_details.append(f"- {device['name']} ({device.get('ip_address', 'N/A')}) - Status: {device.get('status', 'unknown')}")
+    
+    # Get recent alerts related to this incident
+    related_alerts = await db.alerts.find(
+        {"device_id": {"$in": incident.get('affected_devices', [])}},
+        {"_id": 0}
+    ).sort("created_at", -1).to_list(10)
+    
+    alert_summary = "\n".join([
+        f"- [{a.get('severity', 'N/A').upper()}] {a.get('title', 'Unknown')} on {a.get('device_name', 'Unknown')}"
+        for a in related_alerts
+    ]) if related_alerts else "No recent alerts found."
+    
+    context = f"""
+=== INCIDENT DETAILS ===
+Ticket: {incident.get('ticket_number', 'N/A')}
+Title: {incident['title']}
+Description: {incident['description']}
+Priority: {incident['priority']}
+Category: {incident['category']}
+Status: {incident['status']}
+Escalation Level: L{incident.get('escalation_level', 1)}
+Created: {incident.get('created_at', 'N/A')}
+
+=== AFFECTED DEVICES ===
+{chr(10).join(device_details) if device_details else 'No specific devices assigned.'}
+
+=== RELATED ALERTS ===
+{alert_summary}
+"""
+    
+    analysis = await get_ai_analysis(
+        context,
+        """You are an expert NOC AI Agent. Perform a comprehensive troubleshooting analysis and provide a detailed report with the following sections:
+
+1. **INCIDENT SUMMARY**: Brief summary of the issue
+2. **ROOT CAUSE ANALYSIS**: Identify probable root causes based on available data
+3. **TROUBLESHOOTING STEPS**: Step-by-step troubleshooting guide
+4. **RECOMMENDED ACTIONS**: Specific actions to resolve the issue
+5. **PREVENTION MEASURES**: How to prevent this issue in the future
+6. **ESTIMATED RESOLUTION TIME**: Based on complexity
+7. **ESCALATION RECOMMENDATION**: Whether to escalate and to which team
+
+Be specific, technical, and actionable."""
+    )
+    
+    # Store the troubleshooting report
+    troubleshoot_report = {
+        "id": str(uuid.uuid4()),
+        "incident_id": incident_id,
+        "analysis": analysis,
+        "triggered_by": current_user["name"],
+        "created_at": datetime.now(timezone.utc).isoformat()
+    }
+    await db.troubleshoot_reports.insert_one(troubleshoot_report)
+    
+    # Update incident with AI suggestions
+    await db.incidents.update_one(
+        {"id": incident_id},
+        {"$set": {
+            "ai_suggestions": analysis,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+            "status": "in_progress" if incident.get('status') == 'open' else incident.get('status')
+        }}
+    )
+    
+    return {
+        "report_id": troubleshoot_report["id"],
+        "incident_id": incident_id,
+        "analysis": analysis,
+        "triggered_by": current_user["name"],
+        "created_at": troubleshoot_report["created_at"]
+    }
 
 # ===================== PERFORMANCE ROUTES =====================
 @performance_router.get("", response_model=List[PerformanceMetric])
@@ -1120,7 +1316,7 @@ async def download_report_pdf(report_id: str, current_user: dict = Depends(get_c
     elements = []
     
     # Title
-    elements.append(Paragraph(f"ATECH NOC Commander", title_style))
+    elements.append(Paragraph("ATECH NOC Commander", title_style))
     elements.append(Paragraph(report.get('title', 'Report'), styles['Heading2']))
     elements.append(Spacer(1, 10))
     
@@ -1383,18 +1579,18 @@ async def seed_demo_data(current_user: dict = Depends(get_current_user)):
     
     # Create demo devices
     demo_devices = [
-        {"name": "Core-Router-01", "type": "router", "ip_address": "10.0.1.1", "location": "DC-East", "vendor": "Cisco", "model": "ASR 9000", "status": "online"},
-        {"name": "Core-Switch-01", "type": "switch", "ip_address": "10.0.1.2", "location": "DC-East", "vendor": "Cisco", "model": "Catalyst 9500", "status": "online"},
-        {"name": "Firewall-01", "type": "firewall", "ip_address": "10.0.1.3", "location": "DC-East", "vendor": "Palo Alto", "model": "PA-5260", "status": "online"},
-        {"name": "Load-Balancer-01", "type": "load_balancer", "ip_address": "10.0.1.4", "location": "DC-East", "vendor": "F5", "model": "BIG-IP i5800", "status": "online"},
-        {"name": "Server-Web-01", "type": "server", "ip_address": "10.0.2.10", "location": "DC-East", "vendor": "Dell", "model": "PowerEdge R750", "status": "online"},
-        {"name": "Server-Web-02", "type": "server", "ip_address": "10.0.2.11", "location": "DC-East", "vendor": "Dell", "model": "PowerEdge R750", "status": "degraded"},
-        {"name": "Server-DB-01", "type": "server", "ip_address": "10.0.3.10", "location": "DC-East", "vendor": "HP", "model": "ProLiant DL380", "status": "online"},
-        {"name": "AWS-Instance-01", "type": "cloud_instance", "ip_address": "172.31.1.10", "location": "AWS-us-east-1", "vendor": "AWS", "model": "c5.xlarge", "status": "online"},
-        {"name": "Azure-VM-01", "type": "cloud_instance", "ip_address": "172.16.1.10", "location": "Azure-EastUS", "vendor": "Azure", "model": "Standard_D4s_v3", "status": "online"},
-        {"name": "Edge-Router-NYC", "type": "router", "ip_address": "10.1.1.1", "location": "NYC-Office", "vendor": "Juniper", "model": "MX240", "status": "online"},
-        {"name": "Edge-Switch-NYC", "type": "switch", "ip_address": "10.1.1.2", "location": "NYC-Office", "vendor": "Arista", "model": "7050X3", "status": "offline"},
-        {"name": "WiFi-AP-Floor1", "type": "access_point", "ip_address": "10.1.2.10", "location": "NYC-Office", "vendor": "Aruba", "model": "AP-535", "status": "online"},
+        {"name": "Core-Router-01", "type": "router", "ip_address": "10.0.1.1", "location": "DC-East", "vendor": "Cisco", "model": "ASR 9000", "status": "online", "mac_address": "00:1A:2B:3C:4D:01", "hostname": "core-rtr-01.dc-east.atech.local", "os_version": "IOS-XR 7.5.2", "os_install_date": "2024-03-15", "warranty_status": "active", "warranty_expiry": "2027-03-15", "aaa_enabled": True},
+        {"name": "Core-Switch-01", "type": "switch", "ip_address": "10.0.1.2", "location": "DC-East", "vendor": "Cisco", "model": "Catalyst 9500", "status": "online", "mac_address": "00:1A:2B:3C:4D:02", "hostname": "core-sw-01.dc-east.atech.local", "os_version": "IOS-XE 17.6.3", "os_install_date": "2024-01-20", "warranty_status": "active", "warranty_expiry": "2026-12-31", "aaa_enabled": True},
+        {"name": "Firewall-01", "type": "firewall", "ip_address": "10.0.1.3", "location": "DC-East", "vendor": "Palo Alto", "model": "PA-5260", "status": "online", "mac_address": "00:1A:2B:3C:4D:03", "hostname": "fw-01.dc-east.atech.local", "os_version": "PAN-OS 11.0.2", "os_install_date": "2024-06-01", "warranty_status": "active", "warranty_expiry": "2028-06-01", "aaa_enabled": True},
+        {"name": "Load-Balancer-01", "type": "load_balancer", "ip_address": "10.0.1.4", "location": "DC-East", "vendor": "F5", "model": "BIG-IP i5800", "status": "online", "mac_address": "00:1A:2B:3C:4D:04", "hostname": "lb-01.dc-east.atech.local", "os_version": "TMOS 16.1.3", "os_install_date": "2023-09-15", "warranty_status": "active", "warranty_expiry": "2026-09-15", "aaa_enabled": False},
+        {"name": "Server-Web-01", "type": "server", "ip_address": "10.0.2.10", "location": "DC-East", "vendor": "Dell", "model": "PowerEdge R750", "status": "online", "mac_address": "00:1A:2B:3C:4D:10", "hostname": "web-srv-01.dc-east.atech.local", "os_version": "RHEL 8.8", "os_install_date": "2024-02-01", "warranty_status": "active", "warranty_expiry": "2027-02-01", "aaa_enabled": False},
+        {"name": "Server-Web-02", "type": "server", "ip_address": "10.0.2.11", "location": "DC-East", "vendor": "Dell", "model": "PowerEdge R750", "status": "degraded", "mac_address": "00:1A:2B:3C:4D:11", "hostname": "web-srv-02.dc-east.atech.local", "os_version": "RHEL 7.9", "os_install_date": "2022-06-15", "warranty_status": "expiring_soon", "warranty_expiry": "2025-06-15", "aaa_enabled": False},
+        {"name": "Server-DB-01", "type": "server", "ip_address": "10.0.3.10", "location": "DC-East", "vendor": "HP", "model": "ProLiant DL380", "status": "online", "mac_address": "00:1A:2B:3C:4D:20", "hostname": "db-srv-01.dc-east.atech.local", "os_version": "Oracle Linux 8.7", "os_install_date": "2023-11-01", "warranty_status": "active", "warranty_expiry": "2026-11-01", "aaa_enabled": True},
+        {"name": "AWS-Instance-01", "type": "cloud_instance", "ip_address": "172.31.1.10", "location": "AWS-us-east-1", "vendor": "AWS", "model": "c5.xlarge", "status": "online", "hostname": "aws-app-01.us-east-1.compute.internal", "os_version": "Amazon Linux 2023", "os_install_date": "2024-08-01", "warranty_status": "active", "aaa_enabled": False},
+        {"name": "Azure-VM-01", "type": "cloud_instance", "ip_address": "172.16.1.10", "location": "Azure-EastUS", "vendor": "Azure", "model": "Standard_D4s_v3", "status": "online", "hostname": "azure-vm-01.eastus.cloudapp.azure.com", "os_version": "Windows Server 2022", "os_install_date": "2024-04-15", "warranty_status": "active", "aaa_enabled": False},
+        {"name": "Edge-Router-NYC", "type": "router", "ip_address": "10.1.1.1", "location": "NYC-Office", "vendor": "Juniper", "model": "MX240", "status": "online", "mac_address": "00:1A:2B:3C:5D:01", "hostname": "edge-rtr-nyc.atech.local", "os_version": "Junos 21.4R3", "os_install_date": "2023-03-01", "warranty_status": "active", "warranty_expiry": "2026-03-01", "aaa_enabled": True},
+        {"name": "Edge-Switch-NYC", "type": "switch", "ip_address": "10.1.1.2", "location": "NYC-Office", "vendor": "Arista", "model": "7050X3", "status": "offline", "mac_address": "00:1A:2B:3C:5D:02", "hostname": "edge-sw-nyc.atech.local", "os_version": "EOS 4.28.1F", "os_install_date": "2022-01-15", "warranty_status": "expired", "warranty_expiry": "2024-01-15", "aaa_enabled": True},
+        {"name": "WiFi-AP-Floor1", "type": "access_point", "ip_address": "10.1.2.10", "location": "NYC-Office", "vendor": "Aruba", "model": "AP-535", "status": "online", "mac_address": "00:1A:2B:3C:5D:10", "hostname": "wifi-ap-f1.nyc.atech.local", "os_version": "ArubaOS 8.10.0.4", "os_install_date": "2024-05-01", "warranty_status": "active", "warranty_expiry": "2027-05-01", "aaa_enabled": True},
     ]
     
     for d in demo_devices:
