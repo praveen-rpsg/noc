@@ -4,6 +4,7 @@ import { useAuth } from '../context/AuthContext';
 import { Button } from '../components/ui/button';
 import { ScrollArea } from '../components/ui/scroll-area';
 import { Badge } from '../components/ui/badge';
+import PendingActionsNotification from './PendingActionsNotification';
 import { 
   LayoutDashboard, 
   Monitor, 
@@ -226,6 +227,10 @@ export const MainLayout = ({ children }) => {
   return (
     <div className="min-h-screen bg-background">
       <Sidebar notificationCount={notificationCount} />
+      {/* Top bar with pending actions */}
+      <div className="fixed top-4 right-6 z-50">
+        <PendingActionsNotification />
+      </div>
       <main 
         className="transition-all duration-300 ml-64"
       >

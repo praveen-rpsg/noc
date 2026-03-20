@@ -699,6 +699,132 @@ class IncidentAction(BaseModel):
     result: Optional[str] = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
+# ===================== AUTONOMOUS AGENT MODELS =====================
+
+class ActionType(str, Enum):
+    # Auto-resolve actions (no confirmation needed)
+    CONFIG_CORRECTION = "config_correction"
+    CLEAR_LOGS = "clear_logs"
+    ROUTE_TABLE_FIX = "route_table_fix"
+    TRACEROUTE_ANALYSIS = "traceroute_analysis"
+    STP_LOOP_DETECTION = "stp_loop_detection"
+    ASYMMETRIC_ROUTING_FIX = "asymmetric_routing_fix"
+    MEMORY_CLEANUP = "memory_cleanup"
+    SWITCHING_LOOP_FIX = "switching_loop_fix"
+    ROUTING_LOOP_FIX = "routing_loop_fix"
+    SERVICE_RESTART = "service_restart"
+    INTERFACE_BOUNCE = "interface_bounce"
+    
+    # Actions requiring confirmation
+    DEVICE_REBOOT = "device_reboot"
+    LINK_RESET = "link_reset"
+    FIRMWARE_UPDATE = "firmware_update"
+    FACTORY_RESET = "factory_reset"
+    POWER_CYCLE = "power_cycle"
+    HARDWARE_REPLACEMENT = "hardware_replacement"
+
+# Actions that can be auto-executed without confirmation
+AUTO_RESOLVE_ACTIONS = [
+    ActionType.CONFIG_CORRECTION,
+    ActionType.CLEAR_LOGS,
+    ActionType.ROUTE_TABLE_FIX,
+    ActionType.TRACEROUTE_ANALYSIS,
+    ActionType.STP_LOOP_DETECTION,
+    ActionType.ASYMMETRIC_ROUTING_FIX,
+    ActionType.MEMORY_CLEANUP,
+    ActionType.SWITCHING_LOOP_FIX,
+    ActionType.ROUTING_LOOP_FIX,
+    ActionType.SERVICE_RESTART,
+    ActionType.INTERFACE_BOUNCE,
+]
+
+# Actions requiring user confirmation
+CONFIRMATION_REQUIRED_ACTIONS = [
+    ActionType.DEVICE_REBOOT,
+    ActionType.LINK_RESET,
+    ActionType.FIRMWARE_UPDATE,
+    ActionType.FACTORY_RESET,
+    ActionType.POWER_CYCLE,
+    ActionType.HARDWARE_REPLACEMENT,
+]
+
+class AgentExecutionStatus(str, Enum):
+    PENDING = "pending"
+    ANALYZING = "analyzing"
+    EXECUTING = "executing"
+    WAITING_CONFIRMATION = "waiting_confirmation"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    PARTIALLY_RESOLVED = "partially_resolved"
+
+class AgentExecution(BaseModel):
+    """Tracks an AI agent's execution session for an incident"""
+    model_config = ConfigDict(extra="ignore")
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    incident_id: str
+    device_id: Optional[str] = None
+    device_ip: Optional[str] = None
+    status: AgentExecutionStatus = AgentExecutionStatus.PENDING
+    triggered_by: str  # "auto" or user name
+    trigger_type: str = "manual"  # "auto" or "manual"
+    
+    # Analysis results
+    analysis: Optional[str] = None
+    root_cause: Optional[str] = None
+    
+    # Actions to be taken
+    planned_actions: List[Dict[str, Any]] = []
+    executed_actions: List[Dict[str, Any]] = []
+    pending_confirmations: List[Dict[str, Any]] = []
+    
+    # Execution log
+    execution_log: List[Dict[str, Any]] = []
+    
+    # SSH session info
+    ssh_connected: bool = False
+    ssh_output: Optional[str] = None
+    
+    # Resolution
+    resolution_summary: Optional[str] = None
+    incident_resolved: bool = False
+    
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    completed_at: Optional[datetime] = None
+
+class PendingAction(BaseModel):
+    """Action waiting for user confirmation"""
+    model_config = ConfigDict(extra="ignore")
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    execution_id: str
+    incident_id: str
+    device_id: Optional[str] = None
+    device_name: Optional[str] = None
+    action_type: str
+    action_description: str
+    command_to_execute: Optional[str] = None
+    risk_level: str = "high"  # "low", "medium", "high", "critical"
+    estimated_downtime: Optional[str] = None
+    status: str = "pending"  # "pending", "approved", "rejected", "executed"
+    requested_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    responded_by: Optional[str] = None
+    responded_at: Optional[datetime] = None
+    execution_result: Optional[str] = None
+
+class AgentSettings(BaseModel):
+    """Global settings for AI agent behavior"""
+    model_config = ConfigDict(extra="ignore")
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    auto_trigger_on_incident: bool = False  # Whether to auto-trigger agent on new incidents
+    auto_trigger_priorities: List[str] = ["P1", "P2"]  # Which priorities to auto-trigger for
+    max_auto_actions_per_incident: int = 10
+    ssh_timeout: int = 30
+    command_timeout: int = 60
+    enable_real_ssh: bool = True  # If false, runs in simulation mode
+    notification_on_action: bool = True
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
 # ===================== HELPER FUNCTIONS =====================
 def hash_password(password: str) -> str:
     return bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
@@ -759,6 +885,686 @@ Be concise, technical, and actionable in your responses."""
     except Exception as e:
         logger.error(f"AI analysis error: {e}")
         return f"AI analysis temporarily unavailable. Error: {str(e)}"
+
+# ===================== AUTONOMOUS AGENT SERVICE =====================
+
+class AutonomousAgentService:
+    """Service for autonomous incident resolution"""
+    
+    def __init__(self):
+        self.ssh_clients = {}
+    
+    async def get_agent_settings(self) -> dict:
+        """Get agent settings from DB or create defaults"""
+        settings = await db.agent_settings.find_one({}, {"_id": 0})
+        if not settings:
+            default_settings = AgentSettings()
+            settings_dict = default_settings.model_dump()
+            settings_dict["created_at"] = settings_dict["created_at"].isoformat()
+            settings_dict["updated_at"] = settings_dict["updated_at"].isoformat()
+            await db.agent_settings.insert_one(settings_dict)
+            return settings_dict
+        return settings
+    
+    async def analyze_incident_for_actions(self, incident: dict, device: dict = None) -> dict:
+        """Use AI to analyze incident and determine required actions"""
+        device_info = ""
+        if device:
+            device_info = f"""
+Device Information:
+- Name: {device.get('name', 'N/A')}
+- Type: {device.get('type', 'N/A')}
+- IP: {device.get('ip_address', 'N/A')}
+- Vendor: {device.get('vendor', 'N/A')}
+- Model: {device.get('model', 'N/A')}
+- Status: {device.get('status', 'N/A')}
+- OS Version: {device.get('os_version', 'N/A')}
+"""
+        
+        context = f"""
+INCIDENT DETAILS:
+- Ticket: {incident.get('ticket_number', 'N/A')}
+- Title: {incident.get('title', 'N/A')}
+- Description: {incident.get('description', 'N/A')}
+- Priority: {incident.get('priority', 'N/A')}
+- Category: {incident.get('category', 'N/A')}
+- Status: {incident.get('status', 'N/A')}
+{device_info}
+
+AVAILABLE AUTO-RESOLVE ACTIONS (no confirmation needed):
+1. config_correction - Fix configuration errors
+2. clear_logs - Clear system/application logs
+3. route_table_fix - Fix routing table issues
+4. traceroute_analysis - Run traceroute to detect packet drops
+5. stp_loop_detection - Detect and fix STP loops
+6. asymmetric_routing_fix - Fix asymmetric routing issues
+7. memory_cleanup - Clean up dead memory/processes
+8. switching_loop_fix - Detect and fix switching loops
+9. routing_loop_fix - Detect and fix routing loops
+10. service_restart - Restart affected services
+11. interface_bounce - Bounce network interfaces
+
+ACTIONS REQUIRING USER CONFIRMATION:
+1. device_reboot - Full device reboot
+2. link_reset - Reset network links
+3. firmware_update - Update device firmware
+4. factory_reset - Factory reset device
+5. power_cycle - Power cycle device
+6. hardware_replacement - Flag for hardware replacement
+"""
+        
+        query = """Analyze this incident and provide a JSON response with:
+1. root_cause: Brief root cause analysis
+2. actions: Array of actions to take, each with:
+   - action_type: One of the action types listed above
+   - description: What this action will do
+   - command: The CLI command to execute (if applicable)
+   - risk_level: "low", "medium", "high", or "critical"
+   - estimated_downtime: Expected downtime (e.g., "0 minutes", "5 minutes")
+   - order: Execution order (1, 2, 3...)
+3. resolution_confidence: Percentage (0-100) confidence this will resolve the issue
+
+IMPORTANT: Return ONLY valid JSON, no markdown or explanations. Example:
+{
+  "root_cause": "Memory leak causing high CPU",
+  "actions": [
+    {"action_type": "memory_cleanup", "description": "Clear dead processes", "command": "pkill -9 zombie_proc", "risk_level": "low", "estimated_downtime": "0 minutes", "order": 1}
+  ],
+  "resolution_confidence": 85
+}"""
+        
+        try:
+            response = await get_ai_analysis(context, query)
+            # Try to parse JSON from response
+            import re
+            json_match = re.search(r'\{[\s\S]*\}', response)
+            if json_match:
+                return json.loads(json_match.group())
+            return {"root_cause": "Unable to determine", "actions": [], "resolution_confidence": 0}
+        except Exception as e:
+            logger.error(f"Error analyzing incident: {e}")
+            return {"root_cause": str(e), "actions": [], "resolution_confidence": 0}
+    
+    async def connect_ssh(self, device: dict) -> tuple:
+        """Connect to device via SSH"""
+        settings = await self.get_agent_settings()
+        
+        if not settings.get('enable_real_ssh', True):
+            return None, "SSH disabled - running in simulation mode"
+        
+        ip = device.get('ip_address')
+        if not ip:
+            return None, "No IP address configured"
+        
+        # Try to get SSH credentials from settings
+        ssh_creds = await db.settings_ssh.find_one({"device_id": device.get('id')}, {"_id": 0})
+        if not ssh_creds:
+            # Try device-type based credentials
+            ssh_creds = await db.settings_ssh.find_one({"device_type": device.get('type')}, {"_id": 0})
+        
+        username = ssh_creds.get('username', 'admin') if ssh_creds else 'admin'
+        password = ssh_creds.get('password', '') if ssh_creds else ''
+        port = ssh_creds.get('port', 22) if ssh_creds else 22
+        
+        try:
+            client = paramiko.SSHClient()
+            client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+            client.connect(
+                ip,
+                port=port,
+                username=username,
+                password=password,
+                timeout=settings.get('ssh_timeout', 30),
+                allow_agent=False,
+                look_for_keys=False
+            )
+            return client, "Connected successfully"
+        except Exception as e:
+            logger.warning(f"SSH connection failed to {ip}: {e}")
+            return None, f"SSH connection failed: {str(e)}"
+    
+    async def execute_command(self, ssh_client, command: str, timeout: int = 60) -> dict:
+        """Execute a command via SSH"""
+        if ssh_client is None:
+            # Simulation mode
+            return {
+                "success": True,
+                "output": f"[SIMULATED] Command executed: {command}",
+                "simulated": True
+            }
+        
+        try:
+            stdin, stdout, stderr = ssh_client.exec_command(command, timeout=timeout)
+            output = stdout.read().decode('utf-8')
+            error = stderr.read().decode('utf-8')
+            
+            return {
+                "success": True if not error else False,
+                "output": output,
+                "error": error,
+                "simulated": False
+            }
+        except Exception as e:
+            return {
+                "success": False,
+                "output": "",
+                "error": str(e),
+                "simulated": False
+            }
+    
+    async def execute_auto_action(self, action: dict, ssh_client, device: dict) -> dict:
+        """Execute an auto-resolve action"""
+        action_type = action.get('action_type')
+        command = action.get('command')
+        
+        # Generate appropriate command based on action type if not provided
+        if not command:
+            device_type = device.get('type', 'server')
+            vendor = device.get('vendor', '').lower()
+            
+            command_templates = {
+                'config_correction': {
+                    'cisco': 'show running-config | include error',
+                    'default': 'cat /etc/network/interfaces'
+                },
+                'clear_logs': {
+                    'cisco': 'clear logging',
+                    'default': 'truncate -s 0 /var/log/syslog'
+                },
+                'route_table_fix': {
+                    'cisco': 'show ip route',
+                    'default': 'ip route show'
+                },
+                'traceroute_analysis': {
+                    'cisco': 'traceroute 8.8.8.8',
+                    'default': 'traceroute -n 8.8.8.8'
+                },
+                'stp_loop_detection': {
+                    'cisco': 'show spanning-tree summary',
+                    'default': 'brctl showstp br0'
+                },
+                'memory_cleanup': {
+                    'cisco': 'clear memory',
+                    'default': 'sync; echo 3 > /proc/sys/vm/drop_caches'
+                },
+                'service_restart': {
+                    'default': 'systemctl restart networking'
+                },
+                'interface_bounce': {
+                    'cisco': 'interface shutdown; no shutdown',
+                    'default': 'ifdown eth0 && ifup eth0'
+                }
+            }
+            
+            if action_type in command_templates:
+                cmd_dict = command_templates[action_type]
+                command = cmd_dict.get(vendor, cmd_dict.get('default', 'echo "No command available"'))
+        
+        result = await self.execute_command(ssh_client, command)
+        
+        return {
+            "action_type": action_type,
+            "command": command,
+            "result": result,
+            "executed_at": datetime.now(timezone.utc).isoformat(),
+            "success": result.get('success', False)
+        }
+    
+    async def run_autonomous_troubleshooting(self, incident_id: str, triggered_by: str, trigger_type: str = "manual") -> dict:
+        """Main function to run autonomous troubleshooting"""
+        
+        # Get incident
+        incident = await db.incidents.find_one({"id": incident_id}, {"_id": 0})
+        if not incident:
+            raise HTTPException(status_code=404, detail="Incident not found")
+        
+        # Create execution record
+        execution = AgentExecution(
+            incident_id=incident_id,
+            triggered_by=triggered_by,
+            trigger_type=trigger_type,
+            status=AgentExecutionStatus.ANALYZING
+        )
+        
+        execution_dict = execution.model_dump()
+        execution_dict["created_at"] = execution_dict["created_at"].isoformat()
+        execution_dict["updated_at"] = execution_dict["updated_at"].isoformat()
+        
+        # Add initial log entry
+        execution_dict["execution_log"].append({
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "message": f"Agent started - triggered by {triggered_by} ({trigger_type})",
+            "type": "info"
+        })
+        
+        # Get affected device
+        device = None
+        if incident.get('affected_devices'):
+            device_id = incident['affected_devices'][0]
+            device = await db.devices.find_one({"id": device_id}, {"_id": 0})
+            if device:
+                execution_dict["device_id"] = device.get('id')
+                execution_dict["device_ip"] = device.get('ip_address')
+                execution_dict["execution_log"].append({
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "message": f"Target device: {device.get('name')} ({device.get('ip_address')})",
+                    "type": "info"
+                })
+        
+        # Store a copy for insertion to avoid _id being added to our response dict
+        insert_dict = execution_dict.copy()
+        await db.agent_executions.insert_one(insert_dict)
+        
+        try:
+            # Analyze incident and determine actions
+            analysis = await self.analyze_incident_for_actions(incident, device)
+            
+            execution_dict["analysis"] = json.dumps(analysis)
+            execution_dict["root_cause"] = analysis.get('root_cause', 'Unknown')
+            execution_dict["planned_actions"] = analysis.get('actions', [])
+            
+            execution_dict["execution_log"].append({
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "message": f"Root cause identified: {analysis.get('root_cause', 'Unknown')}",
+                "type": "analysis"
+            })
+            
+            # Connect to device via SSH
+            ssh_client = None
+            if device:
+                ssh_client, ssh_message = await self.connect_ssh(device)
+                execution_dict["ssh_connected"] = ssh_client is not None
+                execution_dict["execution_log"].append({
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "message": f"SSH: {ssh_message}",
+                    "type": "ssh"
+                })
+            
+            # Process actions
+            execution_dict["status"] = AgentExecutionStatus.EXECUTING.value
+            await db.agent_executions.update_one(
+                {"id": execution_dict["id"]},
+                {"$set": execution_dict}
+            )
+            
+            actions_executed = []
+            pending_confirmations = []
+            
+            for action in sorted(analysis.get('actions', []), key=lambda x: x.get('order', 999)):
+                action_type = action.get('action_type', '')
+                
+                # Check if action requires confirmation
+                requires_confirmation = action_type in [a.value for a in CONFIRMATION_REQUIRED_ACTIONS]
+                
+                if requires_confirmation:
+                    # Create pending action for confirmation
+                    pending_action = PendingAction(
+                        execution_id=execution_dict["id"],
+                        incident_id=incident_id,
+                        device_id=device.get('id') if device else None,
+                        device_name=device.get('name') if device else None,
+                        action_type=action_type,
+                        action_description=action.get('description', ''),
+                        command_to_execute=action.get('command'),
+                        risk_level=action.get('risk_level', 'high'),
+                        estimated_downtime=action.get('estimated_downtime')
+                    )
+                    
+                    pending_dict = pending_action.model_dump()
+                    pending_dict["requested_at"] = pending_dict["requested_at"].isoformat()
+                    pending_insert = pending_dict.copy()
+                    await db.pending_actions.insert_one(pending_insert)
+                    
+                    pending_confirmations.append({
+                        "id": pending_dict["id"],
+                        "action_type": action_type,
+                        "description": action.get('description', ''),
+                        "risk_level": action.get('risk_level', 'high')
+                    })
+                    
+                    execution_dict["execution_log"].append({
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                        "message": f"⚠️ Action requires confirmation: {action_type} - {action.get('description', '')}",
+                        "type": "confirmation_required"
+                    })
+                    
+                    # Broadcast notification for confirmation
+                    await ws_manager.broadcast({
+                        "type": "action_confirmation_required",
+                        "data": {
+                            "action_id": pending_dict["id"],
+                            "incident_id": incident_id,
+                            "action_type": action_type,
+                            "description": action.get('description', ''),
+                            "device_name": device.get('name') if device else 'Unknown',
+                            "risk_level": action.get('risk_level', 'high')
+                        }
+                    })
+                else:
+                    # Execute auto-resolve action
+                    execution_dict["execution_log"].append({
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                        "message": f"Executing: {action_type} - {action.get('description', '')}",
+                        "type": "executing"
+                    })
+                    
+                    result = await self.execute_auto_action(action, ssh_client, device or {})
+                    actions_executed.append(result)
+                    
+                    status_emoji = "✅" if result.get('success') else "❌"
+                    execution_dict["execution_log"].append({
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                        "message": f"{status_emoji} {action_type}: {result.get('result', {}).get('output', 'Completed')[:200]}",
+                        "type": "result"
+                    })
+            
+            # Close SSH connection
+            if ssh_client:
+                ssh_client.close()
+            
+            # Update execution record
+            execution_dict["executed_actions"] = actions_executed
+            execution_dict["pending_confirmations"] = pending_confirmations
+            execution_dict["updated_at"] = datetime.now(timezone.utc).isoformat()
+            
+            # Determine final status
+            if pending_confirmations:
+                execution_dict["status"] = AgentExecutionStatus.WAITING_CONFIRMATION.value
+            elif all(a.get('success', False) for a in actions_executed):
+                execution_dict["status"] = AgentExecutionStatus.COMPLETED.value
+                execution_dict["incident_resolved"] = True
+                execution_dict["completed_at"] = datetime.now(timezone.utc).isoformat()
+                
+                # Update incident status
+                await db.incidents.update_one(
+                    {"id": incident_id},
+                    {"$set": {
+                        "status": "resolved",
+                        "resolution": f"Auto-resolved by AI Agent. Root cause: {analysis.get('root_cause', 'Unknown')}",
+                        "resolved_at": datetime.now(timezone.utc).isoformat(),
+                        "updated_at": datetime.now(timezone.utc).isoformat()
+                    }}
+                )
+                
+                execution_dict["execution_log"].append({
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "message": "✅ Incident resolved successfully",
+                    "type": "success"
+                })
+            else:
+                execution_dict["status"] = AgentExecutionStatus.PARTIALLY_RESOLVED.value
+                execution_dict["execution_log"].append({
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "message": "⚠️ Some actions failed - manual intervention may be required",
+                    "type": "warning"
+                })
+            
+            # Generate resolution summary
+            execution_dict["resolution_summary"] = await self.generate_resolution_summary(
+                incident, analysis, actions_executed, pending_confirmations
+            )
+            
+            await db.agent_executions.update_one(
+                {"id": execution_dict["id"]},
+                {"$set": execution_dict}
+            )
+            
+            return execution_dict
+            
+        except Exception as e:
+            logger.error(f"Agent execution error: {e}")
+            execution_dict["status"] = AgentExecutionStatus.FAILED.value
+            execution_dict["execution_log"].append({
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "message": f"❌ Agent failed: {str(e)}",
+                "type": "error"
+            })
+            await db.agent_executions.update_one(
+                {"id": execution_dict["id"]},
+                {"$set": execution_dict}
+            )
+            raise HTTPException(status_code=500, detail=str(e))
+    
+    async def generate_resolution_summary(self, incident: dict, analysis: dict, executed: list, pending: list) -> str:
+        """Generate a summary of what was done"""
+        summary_parts = [
+            f"## Resolution Summary for {incident.get('ticket_number', 'Unknown')}",
+            f"\n**Root Cause:** {analysis.get('root_cause', 'Unknown')}",
+            f"\n**Resolution Confidence:** {analysis.get('resolution_confidence', 0)}%",
+            f"\n\n### Actions Executed ({len(executed)}):"
+        ]
+        
+        for action in executed:
+            status = "✅ Success" if action.get('success') else "❌ Failed"
+            summary_parts.append(f"\n- {action.get('action_type')}: {status}")
+        
+        if pending:
+            summary_parts.append(f"\n\n### Pending Confirmations ({len(pending)}):")
+            for p in pending:
+                summary_parts.append(f"\n- ⚠️ {p.get('action_type')}: {p.get('description')}")
+        
+        return "".join(summary_parts)
+    
+    async def execute_confirmed_action(self, action_id: str, confirmed_by: str) -> dict:
+        """Execute an action after user confirmation"""
+        pending = await db.pending_actions.find_one({"id": action_id}, {"_id": 0})
+        if not pending:
+            raise HTTPException(status_code=404, detail="Pending action not found")
+        
+        if pending.get('status') != 'pending':
+            raise HTTPException(status_code=400, detail="Action already processed")
+        
+        # Get device
+        device = None
+        if pending.get('device_id'):
+            device = await db.devices.find_one({"id": pending['device_id']}, {"_id": 0})
+        
+        # Connect and execute
+        ssh_client = None
+        if device:
+            ssh_client, _ = await self.connect_ssh(device)
+        
+        command = pending.get('command_to_execute', 'echo "No command specified"')
+        result = await self.execute_command(ssh_client, command)
+        
+        if ssh_client:
+            ssh_client.close()
+        
+        # Update pending action
+        await db.pending_actions.update_one(
+            {"id": action_id},
+            {"$set": {
+                "status": "executed",
+                "responded_by": confirmed_by,
+                "responded_at": datetime.now(timezone.utc).isoformat(),
+                "execution_result": json.dumps(result)
+            }}
+        )
+        
+        # Update execution log
+        execution = await db.agent_executions.find_one({"id": pending.get('execution_id')}, {"_id": 0})
+        if execution:
+            execution["execution_log"].append({
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "message": f"✅ Confirmed action executed: {pending.get('action_type')} by {confirmed_by}",
+                "type": "confirmed_execution"
+            })
+            execution["executed_actions"].append({
+                "action_type": pending.get('action_type'),
+                "command": command,
+                "result": result,
+                "confirmed_by": confirmed_by,
+                "executed_at": datetime.now(timezone.utc).isoformat()
+            })
+            
+            # Check if all pending actions are now processed
+            remaining = await db.pending_actions.count_documents({
+                "execution_id": pending.get('execution_id'),
+                "status": "pending"
+            })
+            
+            if remaining == 0:
+                execution["status"] = AgentExecutionStatus.COMPLETED.value
+                execution["completed_at"] = datetime.now(timezone.utc).isoformat()
+                execution["incident_resolved"] = True
+                
+                # Update incident
+                await db.incidents.update_one(
+                    {"id": pending.get('incident_id')},
+                    {"$set": {
+                        "status": "resolved",
+                        "resolution": "Resolved by AI Agent after user confirmation",
+                        "resolved_at": datetime.now(timezone.utc).isoformat()
+                    }}
+                )
+            
+            await db.agent_executions.update_one(
+                {"id": execution["id"]},
+                {"$set": execution}
+            )
+        
+        return {"success": True, "result": result}
+
+# Initialize agent service
+agent_service = AutonomousAgentService()
+
+# Create agent execution router
+agent_exec_router = APIRouter(prefix="/agent-exec", tags=["Agent Execution"])
+
+@agent_exec_router.post("/run/{incident_id}")
+async def run_agent_troubleshooting(incident_id: str, current_user: dict = Depends(get_current_user)):
+    """Manually trigger AI agent to troubleshoot an incident"""
+    result = await agent_service.run_autonomous_troubleshooting(
+        incident_id=incident_id,
+        triggered_by=current_user["name"],
+        trigger_type="manual"
+    )
+    return result
+
+@agent_exec_router.get("/executions")
+async def get_all_executions(
+    limit: int = 50,
+    incident_id: Optional[str] = None,
+    current_user: dict = Depends(get_current_user)
+):
+    """Get all agent executions"""
+    query = {}
+    if incident_id:
+        query["incident_id"] = incident_id
+    
+    executions = await db.agent_executions.find(
+        query, {"_id": 0}
+    ).sort("created_at", -1).to_list(limit)
+    
+    return executions
+
+@agent_exec_router.get("/executions/{execution_id}")
+async def get_execution(execution_id: str, current_user: dict = Depends(get_current_user)):
+    """Get a specific agent execution"""
+    execution = await db.agent_executions.find_one({"id": execution_id}, {"_id": 0})
+    if not execution:
+        raise HTTPException(status_code=404, detail="Execution not found")
+    return execution
+
+@agent_exec_router.get("/pending-actions")
+async def get_pending_actions(current_user: dict = Depends(get_current_user)):
+    """Get all pending actions requiring user confirmation"""
+    actions = await db.pending_actions.find(
+        {"status": "pending"}, {"_id": 0}
+    ).sort("requested_at", -1).to_list(100)
+    return actions
+
+@agent_exec_router.get("/pending-actions/count")
+async def get_pending_actions_count(current_user: dict = Depends(get_current_user)):
+    """Get count of pending actions"""
+    count = await db.pending_actions.count_documents({"status": "pending"})
+    return {"count": count}
+
+@agent_exec_router.post("/actions/{action_id}/approve")
+async def approve_action(action_id: str, current_user: dict = Depends(get_current_user)):
+    """Approve and execute a pending action"""
+    result = await agent_service.execute_confirmed_action(action_id, current_user["name"])
+    
+    # Broadcast update
+    await ws_manager.broadcast({
+        "type": "action_approved",
+        "data": {"action_id": action_id, "approved_by": current_user["name"]}
+    })
+    
+    return result
+
+@agent_exec_router.post("/actions/{action_id}/reject")
+async def reject_action(
+    action_id: str, 
+    reason: Optional[str] = None,
+    current_user: dict = Depends(get_current_user)
+):
+    """Reject a pending action"""
+    pending = await db.pending_actions.find_one({"id": action_id}, {"_id": 0})
+    if not pending:
+        raise HTTPException(status_code=404, detail="Action not found")
+    
+    await db.pending_actions.update_one(
+        {"id": action_id},
+        {"$set": {
+            "status": "rejected",
+            "responded_by": current_user["name"],
+            "responded_at": datetime.now(timezone.utc).isoformat(),
+            "rejection_reason": reason
+        }}
+    )
+    
+    # Update execution log
+    execution = await db.agent_executions.find_one({"id": pending.get('execution_id')}, {"_id": 0})
+    if execution:
+        execution["execution_log"].append({
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "message": f"❌ Action rejected: {pending.get('action_type')} by {current_user['name']}. Reason: {reason or 'No reason provided'}",
+            "type": "rejected"
+        })
+        await db.agent_executions.update_one(
+            {"id": execution["id"]},
+            {"$set": {"execution_log": execution["execution_log"]}}
+        )
+    
+    # Broadcast update
+    await ws_manager.broadcast({
+        "type": "action_rejected",
+        "data": {"action_id": action_id, "rejected_by": current_user["name"]}
+    })
+    
+    return {"success": True, "message": "Action rejected"}
+
+@agent_exec_router.get("/settings")
+async def get_agent_settings(current_user: dict = Depends(get_current_user)):
+    """Get agent settings"""
+    settings = await agent_service.get_agent_settings()
+    return settings
+
+@agent_exec_router.put("/settings")
+async def update_agent_settings(
+    settings: Dict[str, Any],
+    current_user: dict = Depends(get_current_user)
+):
+    """Update agent settings"""
+    settings["updated_at"] = datetime.now(timezone.utc).isoformat()
+    
+    await db.agent_settings.update_one(
+        {},
+        {"$set": settings},
+        upsert=True
+    )
+    
+    return {"success": True, "message": "Settings updated"}
+
+@agent_exec_router.get("/execution-log/{incident_id}")
+async def get_incident_execution_log(incident_id: str, current_user: dict = Depends(get_current_user)):
+    """Get all execution logs for an incident"""
+    executions = await db.agent_executions.find(
+        {"incident_id": incident_id}, {"_id": 0}
+    ).sort("created_at", -1).to_list(50)
+    
+    return executions
 
 # ===================== AUTH ROUTES =====================
 @auth_router.post("/register", response_model=TokenResponse)
@@ -1039,6 +1845,29 @@ async def create_incident(incident_data: IncidentCreate, current_user: dict = De
     sla_dict = sla_record.model_dump()
     sla_dict["created_at"] = sla_dict["created_at"].isoformat()
     await db.sla_records.insert_one(sla_dict)
+    
+    # Check if auto-trigger is enabled
+    agent_settings = await agent_service.get_agent_settings()
+    if agent_settings.get('auto_trigger_on_incident', False):
+        auto_priorities = agent_settings.get('auto_trigger_priorities', ['P1', 'P2'])
+        if incident.priority.value in auto_priorities:
+            # Trigger agent in background
+            asyncio.create_task(
+                agent_service.run_autonomous_troubleshooting(
+                    incident_id=incident.id,
+                    triggered_by="System (Auto-Trigger)",
+                    trigger_type="auto"
+                )
+            )
+            # Notify via WebSocket
+            await ws_manager.broadcast({
+                "type": "agent_auto_triggered",
+                "data": {
+                    "incident_id": incident.id,
+                    "ticket_number": incident.ticket_number,
+                    "priority": incident.priority.value
+                }
+            })
     
     return incident
 
@@ -3017,7 +3846,7 @@ async def confirm_incident_action(action_id: str, approved: bool, current_user: 
     return result
 
 @ai_router.get("/incidents/actions/pending")
-async def get_pending_actions(current_user: dict = Depends(get_current_user)):
+async def get_ai_pending_actions(current_user: dict = Depends(get_current_user)):
     """Get all pending actions requiring user confirmation"""
     actions = await db.incident_actions.find(
         {"requires_confirmation": True, "confirmation_status": "pending"},
@@ -3045,6 +3874,7 @@ api_router.include_router(snmp_router)
 api_router.include_router(telnet_router)
 api_router.include_router(escalation_router)
 api_router.include_router(settings_router)
+api_router.include_router(agent_exec_router)
 
 app.include_router(api_router)
 

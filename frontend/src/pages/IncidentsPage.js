@@ -10,7 +10,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, Dialog
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table';
 import { ScrollArea } from '../components/ui/scroll-area';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
-import { incidentsApi, devicesApi } from '../services/api';
+import { incidentsApi, devicesApi, agentExecApi } from '../services/api';
 import { toast } from 'sonner';
 import {
   FileWarning,
@@ -24,7 +24,10 @@ import {
   ArrowUpRight,
   Loader2,
   Wrench,
-  X
+  X,
+  Zap,
+  Play,
+  Terminal
 } from 'lucide-react';
 import { format } from 'date-fns';
 
@@ -85,6 +88,11 @@ export default function IncidentsPage() {
   const [isTroubleshootOpen, setIsTroubleshootOpen] = useState(false);
   const [troubleshootResult, setTroubleshootResult] = useState(null);
   const [troubleshootLoading, setTroubleshootLoading] = useState(false);
+  
+  // Agent execution state
+  const [isAgentRunning, setIsAgentRunning] = useState(false);
+  const [agentExecution, setAgentExecution] = useState(null);
+  const [isAgentPanelOpen, setIsAgentPanelOpen] = useState(false);
 
   const fetchData = useCallback(async () => {
     try {
@@ -120,6 +128,45 @@ export default function IncidentsPage() {
       y: e.clientY,
       incident
     });
+  };
+
+  // Run autonomous agent on incident
+  const handleRunAgent = async (incident) => {
+    setContextMenu({ visible: false, x: 0, y: 0, incident: null });
+    setIsAgentRunning(true);
+    setAgentExecution(null);
+    setIsAgentPanelOpen(true);
+    
+    try {
+      const response = await agentExecApi.runOnIncident(incident.id);
+      setAgentExecution({
+        incident,
+        ...response.data
+      });
+      
+      if (response.data.incident_resolved) {
+        toast.success('Incident resolved by AI Agent!');
+      } else if (response.data.pending_confirmations?.length > 0) {
+        toast.info(`Agent requires ${response.data.pending_confirmations.length} confirmation(s) to proceed`);
+      } else {
+        toast.success('AI Agent execution complete');
+      }
+      
+      fetchData(); // Refresh incidents
+    } catch (error) {
+      toast.error('Failed to run AI Agent');
+      setAgentExecution({
+        incident,
+        error: true,
+        execution_log: [{
+          timestamp: new Date().toISOString(),
+          message: `Error: ${error.response?.data?.detail || error.message}`,
+          type: 'error'
+        }]
+      });
+    } finally {
+      setIsAgentRunning(false);
+    }
   };
 
   const handleAiTroubleshoot = async (incident) => {
@@ -604,20 +651,28 @@ export default function IncidentsPage() {
       {/* Context Menu */}
       {contextMenu.visible && (
         <div 
-          className="fixed z-50 bg-white rounded-lg shadow-lg border border-border/50 py-2 min-w-[200px]"
+          className="fixed z-50 bg-white rounded-lg shadow-lg border border-border/50 py-2 min-w-[220px]"
           style={{ 
-            left: Math.min(contextMenu.x, window.innerWidth - 220),
-            top: Math.min(contextMenu.y, window.innerHeight - 120)
+            left: Math.min(contextMenu.x, window.innerWidth - 240),
+            top: Math.min(contextMenu.y, window.innerHeight - 180)
           }}
           data-testid="incident-context-menu"
         >
+          <button
+            className="w-full px-4 py-2 text-left hover:bg-green-50 flex items-center gap-2 text-sm font-medium border-b border-border/30 pb-2 mb-1"
+            onClick={() => handleRunAgent(contextMenu.incident)}
+            data-testid="context-menu-run-agent"
+          >
+            <Zap className="h-4 w-4 text-green-600" />
+            <span className="text-green-700">Run AI Agent (Auto-Fix)</span>
+          </button>
           <button
             className="w-full px-4 py-2 text-left hover:bg-purple-50 flex items-center gap-2 text-sm"
             onClick={() => handleAiTroubleshoot(contextMenu.incident)}
             data-testid="context-menu-troubleshoot"
           >
             <Brain className="h-4 w-4 text-purple-600" />
-            <span className="font-medium">AI Troubleshoot</span>
+            <span>AI Analysis Only</span>
           </button>
           <button
             className="w-full px-4 py-2 text-left hover:bg-slate-50 flex items-center gap-2 text-sm"
@@ -702,6 +757,154 @@ export default function IncidentsPage() {
                     </Button>
                   )}
                 </div>
+              </div>
+            ) : null}
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* AI Agent Execution Panel */}
+      <Dialog open={isAgentPanelOpen} onOpenChange={setIsAgentPanelOpen}>
+        <DialogContent className="sm:max-w-[900px] max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <div className="flex items-center gap-3">
+              <div className={`p-2 rounded-lg ${isAgentRunning ? 'bg-green-100 animate-pulse' : 'bg-green-100'}`}>
+                <Zap className="h-5 w-5 text-green-600" />
+              </div>
+              <div>
+                <DialogTitle>AI Agent Execution</DialogTitle>
+                {agentExecution?.incident && (
+                  <p className="text-sm text-muted-foreground mt-1">
+                    {agentExecution.incident.ticket_number} - {agentExecution.incident.title}
+                  </p>
+                )}
+              </div>
+            </div>
+          </DialogHeader>
+          
+          <div className="mt-4">
+            {isAgentRunning && !agentExecution ? (
+              <div className="flex flex-col items-center justify-center py-12">
+                <Loader2 className="h-12 w-12 animate-spin text-green-600 mb-4" />
+                <p className="text-lg font-medium">AI Agent is executing...</p>
+                <p className="text-sm text-muted-foreground">Analyzing incident and taking corrective actions</p>
+              </div>
+            ) : agentExecution ? (
+              <div className="space-y-4">
+                {/* Status Badge */}
+                <div className="flex items-center justify-between">
+                  <Badge 
+                    variant="outline" 
+                    className={
+                      agentExecution.status === 'completed' ? 'bg-green-50 text-green-700 border-green-200' :
+                      agentExecution.status === 'waiting_confirmation' ? 'bg-amber-50 text-amber-700 border-amber-200' :
+                      agentExecution.status === 'failed' ? 'bg-red-50 text-red-700 border-red-200' :
+                      'bg-blue-50 text-blue-700 border-blue-200'
+                    }
+                  >
+                    {agentExecution.status?.replace(/_/g, ' ').toUpperCase() || 'UNKNOWN'}
+                  </Badge>
+                  {agentExecution.incident_resolved && (
+                    <Badge className="bg-green-600 text-white">
+                      <CheckCircle className="h-3 w-3 mr-1" />
+                      RESOLVED
+                    </Badge>
+                  )}
+                </div>
+
+                {/* Root Cause */}
+                {agentExecution.root_cause && (
+                  <Card className="bg-slate-50 border-slate-200">
+                    <CardContent className="p-4">
+                      <p className="text-sm font-medium text-slate-600 mb-1">Root Cause Analysis</p>
+                      <p className="text-sm">{agentExecution.root_cause}</p>
+                    </CardContent>
+                  </Card>
+                )}
+
+                {/* Pending Confirmations Alert */}
+                {agentExecution.pending_confirmations?.length > 0 && (
+                  <Card className="bg-amber-50 border-amber-200">
+                    <CardContent className="p-4">
+                      <div className="flex items-center gap-2 text-amber-700 mb-2">
+                        <AlertTriangle className="h-4 w-4" />
+                        <span className="font-medium">Actions Pending Your Confirmation</span>
+                      </div>
+                      <p className="text-sm text-amber-700">
+                        {agentExecution.pending_confirmations.length} action(s) require your approval before they can be executed.
+                        Check the notification bell in the top-right corner to approve or reject.
+                      </p>
+                    </CardContent>
+                  </Card>
+                )}
+
+                {/* Execution Log */}
+                <div>
+                  <p className="text-sm font-medium mb-2 flex items-center gap-2">
+                    <Terminal className="h-4 w-4" />
+                    Execution Log
+                  </p>
+                  <Card className="bg-slate-900 border-slate-700">
+                    <CardContent className="p-4">
+                      <ScrollArea className="h-64">
+                        <div className="space-y-1 font-mono text-xs">
+                          {agentExecution.execution_log?.map((log, idx) => (
+                            <div 
+                              key={idx} 
+                              className={`
+                                ${log.type === 'error' ? 'text-red-400' : ''}
+                                ${log.type === 'success' ? 'text-green-400' : ''}
+                                ${log.type === 'warning' ? 'text-amber-400' : ''}
+                                ${log.type === 'confirmation_required' ? 'text-amber-400' : ''}
+                                ${log.type === 'info' ? 'text-slate-300' : ''}
+                                ${log.type === 'analysis' ? 'text-purple-400' : ''}
+                                ${log.type === 'executing' ? 'text-blue-400' : ''}
+                                ${log.type === 'result' ? 'text-cyan-400' : ''}
+                                ${!log.type ? 'text-slate-400' : ''}
+                              `}
+                            >
+                              <span className="text-slate-500">[{log.timestamp ? format(new Date(log.timestamp), 'HH:mm:ss') : '--:--:--'}]</span> {log.message}
+                            </div>
+                          ))}
+                        </div>
+                      </ScrollArea>
+                    </CardContent>
+                  </Card>
+                </div>
+
+                {/* Actions Summary */}
+                {agentExecution.executed_actions?.length > 0 && (
+                  <div>
+                    <p className="text-sm font-medium mb-2">Executed Actions ({agentExecution.executed_actions.length})</p>
+                    <div className="space-y-2">
+                      {agentExecution.executed_actions.map((action, idx) => (
+                        <div key={idx} className="flex items-center gap-2 text-sm p-2 rounded bg-slate-50">
+                          {action.success ? (
+                            <CheckCircle className="h-4 w-4 text-green-500" />
+                          ) : (
+                            <X className="h-4 w-4 text-red-500" />
+                          )}
+                          <span className="capitalize">{action.action_type?.replace(/_/g, ' ')}</span>
+                          {action.result?.simulated && (
+                            <Badge variant="outline" className="text-xs">Simulated</Badge>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                <DialogFooter>
+                  <Button variant="outline" onClick={() => setIsAgentPanelOpen(false)}>
+                    Close
+                  </Button>
+                  {agentExecution.incident && !agentExecution.incident_resolved && (
+                    <Button onClick={() => handleRunAgent(agentExecution.incident)} disabled={isAgentRunning}>
+                      <RefreshCw className="h-4 w-4 mr-2" />
+                      Run Again
+                    </Button>
+                  )}
+                </DialogFooter>
               </div>
             ) : null}
           </div>

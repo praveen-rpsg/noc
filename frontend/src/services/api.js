@@ -86,3 +86,36 @@ export const dashboardApi = {
 
 // Seed Demo Data
 export const seedDemoData = () => axios.post(`${API}/seed`);
+
+// Autonomous Agent Execution API
+export const agentExecApi = {
+  // Run agent on incident
+  runOnIncident: (incidentId) => axios.post(`${API}/agent-exec/run/${incidentId}`),
+  
+  // Get all executions
+  getExecutions: (params) => axios.get(`${API}/agent-exec/executions`, { params }),
+  
+  // Get specific execution
+  getExecution: (executionId) => axios.get(`${API}/agent-exec/executions/${executionId}`),
+  
+  // Get pending actions requiring confirmation
+  getPendingActions: () => axios.get(`${API}/agent-exec/pending-actions`),
+  
+  // Get pending actions count
+  getPendingCount: () => axios.get(`${API}/agent-exec/pending-actions/count`),
+  
+  // Approve an action
+  approveAction: (actionId) => axios.post(`${API}/agent-exec/actions/${actionId}/approve`),
+  
+  // Reject an action
+  rejectAction: (actionId, reason) => axios.post(`${API}/agent-exec/actions/${actionId}/reject`, null, { params: { reason } }),
+  
+  // Get agent settings
+  getSettings: () => axios.get(`${API}/agent-exec/settings`),
+  
+  // Update agent settings
+  updateSettings: (settings) => axios.put(`${API}/agent-exec/settings`, settings),
+  
+  // Get execution log for incident
+  getExecutionLog: (incidentId) => axios.get(`${API}/agent-exec/execution-log/${incidentId}`),
+};
