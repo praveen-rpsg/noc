@@ -6,104 +6,131 @@ A comprehensive NOC (Network Operation Center) tool where AI agents act as NOC e
 ## Branding
 - **Product Name**: ATECH NOC COMMANDER
 - **Company**: Ameya Technology
-- **Logo**: Integrated throughout the application
 
 ## What's Been Implemented
 
-### Phase 1 - MVP (2026-03-18)
+### Phase 1-4 - Core Features (Complete)
 - ✅ JWT Authentication
-- ✅ Dashboard with KPIs (MTTD, MTTR, SLA, FCR, Uptime)
-- ✅ Device Monitoring with CRUD operations
-- ✅ Alert Management with acknowledge/resolve
-- ✅ Incident Management with AI-powered troubleshooting (GPT-5.2)
-- ✅ Performance Charts (CPU, Memory, Disk, Bandwidth, Latency)
-- ✅ Asset Management with warranty tracking
+- ✅ Dashboard with KPIs
+- ✅ Device Monitoring with CRUD
+- ✅ Alert & Incident Management
+- ✅ AI-powered troubleshooting (GPT-5.2)
+- ✅ Performance Charts
+- ✅ Asset Management
 - ✅ Reports Generation
-- ✅ Configuration Backup
 - ✅ SLA Tracking
+- ✅ Real-time WebSocket alerts
+- ✅ Network Topology (interactive, 3D icons, draggable)
+- ✅ SSH Terminal
+- ✅ AI Agent System with activation codes
+- ✅ Multi-Level Escalation
 
-### Phase 2 - Enhancements (2026-03-18)
-- ✅ Real-time WebSocket updates for live alerts
-- ✅ Network Topology visualization with auto-connected nodes
-- ✅ SSH Terminal for remote device access
-- ✅ Branding updated to ATECH NOC COMMANDER
-- ✅ Ameya Technology logo integration
+### Phase 5 - Settings & Configuration (2026-03-18)
+- ✅ Settings page with tabbed interface
+- ✅ Office 365 Email Configuration
+- ✅ SNMP v1/v2c Community Strings
+- ✅ SNMP v3 Configuration
 
-### Phase 3 - Advanced Features (2026-03-18)
-- ✅ AI Agent System (15-device limit, activation codes)
-- ✅ Multi-Level Escalation System
-- ✅ SNMP Device Discovery (framework)
-- ✅ Telnet Support (framework)
-- ✅ Dashboard Hyperlinks
+### Phase 6 - Major Enhancements (2026-03-20)
 
-### Phase 4 - Bug Fixes & Interactive Topology (2026-03-18)
-- ✅ ResizeObserver Error Fix - All Select dropdowns work without errors
-- ✅ Interactive Network Topology with draggable nodes
-- ✅ 3D Colorful Device Icons with gradients
-- ✅ Hierarchical 3-Tier Layout
-- ✅ Device URL Access (configurable per device)
+#### 1. Autonomous Incident Resolution with AI
+- ✅ AI analyzes incidents and suggests resolutions
+- ✅ Auto-resolve configuration errors automatically
+- ✅ **Requires user confirmation** for reboot/reset actions
+- ✅ **SOS alerts** sent to ALL escalation stakeholders on hardware failure
+- API Endpoints:
+  - `POST /api/ai/incidents/{id}/analyze` - AI analysis with action suggestion
+  - `POST /api/ai/incidents/actions/{id}/confirm` - Approve/reject actions
+  - `GET /api/ai/incidents/actions/pending` - List pending confirmations
 
-### Phase 5 - Settings & Configuration Page (2026-03-18)
-- ✅ **Settings Page** with tabbed interface
-- ✅ **Office 365 Email Configuration**
-  - SMTP server and port configuration
-  - Username/password credentials
-  - Sender email and name
-  - TLS encryption toggle
-  - Test email functionality
-- ✅ **SNMP v1/v2c Community Strings**
-  - Add/Edit/Delete multiple community string configurations
-  - IP range (CIDR) specification
-  - Device type filtering
-  - Location/datacenter assignment
-  - Test SNMP connectivity
-- ✅ **SNMP v3 Configuration**
-  - Security level selection (noAuthNoPriv, authNoPriv, authPriv)
-  - Authentication protocols (MD5, SHA, SHA-224, SHA-256, SHA-384, SHA-512)
-  - Privacy protocols (DES, 3DES, AES-128, AES-192, AES-256)
-  - Username and passwords
-  - IP range and device type filtering
+#### 2. OpenStack Monitoring Configuration
+- ✅ Full OpenStack integration settings
+- ✅ Monitor all services: Nova, Neutron, Cinder, Keystone, Glance, Heat, Swift
+- ✅ Auth URL, credentials, project, region configuration
 
-## Technical Architecture
-- **Frontend**: React 19, Shadcn UI, Recharts, TailwindCSS, Canvas API
-- **Backend**: FastAPI, Motor (async MongoDB), Pydantic, Paramiko (SSH)
-- **Database**: MongoDB
-- **AI**: Emergent LLM (GPT-5.2)
-- **Auth**: JWT (bcrypt password hashing)
-- **Real-time**: WebSockets
+#### 3. Oracle Database Monitoring Configuration
+- ✅ Oracle DB connection settings
+- ✅ Monitor all metrics: Tablespace, Sessions, Locks, Performance, ASM, DataGuard, RMAN
+- ✅ Configurable alert thresholds
 
-## New API Endpoints (Phase 5)
-- `GET /api/settings/email` - Get email configuration
-- `POST /api/settings/email` - Save email configuration
-- `POST /api/settings/email/test` - Test email configuration
-- `DELETE /api/settings/email` - Delete email configuration
-- `GET /api/settings/snmp/community` - Get all SNMP community strings
-- `POST /api/settings/snmp/community` - Create SNMP community string
-- `PUT /api/settings/snmp/community/{id}` - Update SNMP community string
-- `DELETE /api/settings/snmp/community/{id}` - Delete SNMP community string
-- `POST /api/settings/snmp/community/{id}/test` - Test SNMP connectivity
-- `GET /api/settings/snmp/v3` - Get all SNMP v3 configurations
-- `POST /api/settings/snmp/v3` - Create SNMP v3 configuration
-- `PUT /api/settings/snmp/v3/{id}` - Update SNMP v3 configuration
-- `DELETE /api/settings/snmp/v3/{id}` - Delete SNMP v3 configuration
+#### 4. VMware vCenter Monitoring Configuration
+- ✅ vCenter connection settings
+- ✅ Monitor: VMs, ESXi hosts, Datastores, Clusters, Networks, Resource Pools
+- ✅ Configurable CPU/Memory/Datastore alert thresholds
+
+#### 5. Downloadable Reports
+- ✅ **PDF Download** with reportlab
+- ✅ **CSV Download** 
+- ✅ Report preview in modal
+- ✅ Professional formatted reports with ATECH branding
+
+#### 6. Backup Scheduling & Management
+- ✅ Multiple backup methods: TFTP, SCP, SSH Command, API-based
+- ✅ Schedule configuration: Daily, Weekly, Monthly with time selection
+- ✅ Retention policy (days)
+- ✅ Manual backup trigger button
+- ✅ Target device/application selection
+
+#### 7. AAA Server Authentication
+- ✅ **RADIUS support** (port 1812 default)
+- ✅ **TACACS+ support** (port 49 default)
+- ✅ Primary and secondary server configuration
+- ✅ Shared secret management
+- ✅ Options for NOC login and device authentication
+
+#### 8. Custom Dashboard Framework
+- ✅ Dashboard templates API endpoint
+- ✅ Pre-defined templates: OpenStack Monitoring, Oracle Performance, vCenter Overview
+- ✅ Widget definitions with metric mappings
+- ✅ CRUD for custom dashboards
+
+## New Settings Tabs (Phase 6)
+| Tab | Purpose |
+|-----|---------|
+| Email | Office 365 SMTP configuration |
+| SNMP | v1/v2c community strings, v3 with auth/privacy |
+| OpenStack | Cloud infrastructure monitoring |
+| Oracle | Database monitoring |
+| vCenter | VMware infrastructure monitoring |
+| AAA | RADIUS/TACACS+ authentication |
+| Backup | Scheduled backups with TFTP/SCP/SSH/API |
+
+## New API Endpoints (Phase 6)
+### Settings
+- `/api/settings/openstack` - OpenStack CRUD
+- `/api/settings/oracle` - Oracle DB CRUD
+- `/api/settings/vcenter` - vCenter CRUD
+- `/api/settings/aaa` - AAA Server CRUD
+- `/api/settings/backup` - Backup config CRUD
+- `/api/settings/backup/{id}/trigger` - Manual backup trigger
+- `/api/settings/dashboards` - Custom dashboards CRUD
+- `/api/settings/dashboards/templates` - Pre-built templates
+
+### Reports
+- `/api/reports/{id}/download/pdf` - PDF download
+- `/api/reports/{id}/download/csv` - CSV download
+
+### AI Incident Resolution
+- `/api/ai/incidents/{id}/analyze` - AI analysis
+- `/api/ai/incidents/actions/{id}/confirm` - Confirm/reject
+- `/api/ai/incidents/actions/pending` - Pending actions
 
 ## Database Collections (New)
-- `email_config` - Stores Office 365 SMTP configuration
-- `snmp_community` - Stores SNMP v1/v2c community string configurations
-- `snmpv3_config` - Stores SNMP v3 configurations
+- `openstack_config` - OpenStack settings
+- `oracle_config` - Oracle DB settings  
+- `vcenter_config` - vCenter settings
+- `aaa_config` - RADIUS/TACACS+ settings
+- `backup_config` - Backup schedules
+- `backup_jobs` - Backup job history
+- `custom_dashboards` - User dashboards
+- `incident_actions` - AI action tracking
 
-## Next Action Items
-1. 🟢 Use configured SNMP community strings in device discovery
-2. 🟢 Use configured email for escalation notifications
-3. 🟡 Implement real SNMP polling using pysnmp with stored configurations
-4. 🟡 Cloud Provider API Integration (AWS/Azure/GCP)
-
-## Backlog / Future Tasks
-1. Mobile responsive design
-2. Audit logging for all actions
-3. Multi-tenant support
-4. API rate limiting
-5. Advanced reporting with PDF export
+## Pending/Future Items
+1. 🟡 Implement actual SNMP polling with pysnmp
+2. 🟡 Connect to real OpenStack/Oracle/vCenter APIs
+3. 🟡 Build drag-drop dashboard editor UI
+4. 🟡 Mobile responsive design
+5. 🟡 Audit logging
 
 ## Test Credentials
 - Email: admin@noc.com

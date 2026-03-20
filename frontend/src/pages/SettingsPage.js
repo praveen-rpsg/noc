@@ -9,6 +9,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from '../components/ui/dialog';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
 import { Textarea } from '../components/ui/textarea';
+import { ScrollArea } from '../components/ui/scroll-area';
 import { toast } from 'sonner';
 import axios from 'axios';
 import {
@@ -26,7 +27,14 @@ import {
   Server,
   CheckCircle2,
   XCircle,
-  Loader2
+  Loader2,
+  Cloud,
+  Database,
+  Monitor,
+  Key,
+  HardDrive,
+  Play,
+  Calendar
 } from 'lucide-react';
 
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
@@ -37,7 +45,47 @@ const getAuthHeader = () => {
   return { Authorization: `Bearer ${token}` };
 };
 
+// Generic CRUD Hook
+const useSettingsConfig = (endpoint) => {
+  const [configs, setConfigs] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  const fetchConfigs = async () => {
+    try {
+      const response = await axios.get(`${API}/settings/${endpoint}`, { headers: getAuthHeader() });
+      setConfigs(response.data || []);
+    } catch (error) {
+      console.error(`Failed to fetch ${endpoint}:`, error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const createConfig = async (data) => {
+    const response = await axios.post(`${API}/settings/${endpoint}`, data, { headers: getAuthHeader() });
+    await fetchConfigs();
+    return response.data;
+  };
+
+  const updateConfig = async (id, data) => {
+    const response = await axios.put(`${API}/settings/${endpoint}/${id}`, data, { headers: getAuthHeader() });
+    await fetchConfigs();
+    return response.data;
+  };
+
+  const deleteConfig = async (id) => {
+    await axios.delete(`${API}/settings/${endpoint}/${id}`, { headers: getAuthHeader() });
+    await fetchConfigs();
+  };
+
+  useEffect(() => { fetchConfigs(); }, []);
+
+  return { configs, loading, fetchConfigs, createConfig, updateConfig, deleteConfig };
+};
+
 export default function SettingsPage() {
+  const [activeTab, setActiveTab] = useState('email');
+  
   // Email Configuration State
   const [emailConfig, setEmailConfig] = useState({
     smtp_server: 'smtp.office365.com',
@@ -49,95 +97,35 @@ export default function SettingsPage() {
     use_tls: true
   });
   const [emailLoading, setEmailLoading] = useState(false);
-  const [emailTestLoading, setEmailTestLoading] = useState(false);
   const [testEmail, setTestEmail] = useState('');
-  const [showEmailPassword, setShowEmailPassword] = useState(false);
+  const [showPassword, setShowPassword] = useState({});
 
-  // SNMP Community Strings State
-  const [snmpConfigs, setSnmpConfigs] = useState([]);
-  const [snmpLoading, setSnmpLoading] = useState(true);
-  const [snmpDialogOpen, setSnmpDialogOpen] = useState(false);
-  const [editingSnmp, setEditingSnmp] = useState(null);
-  const [snmpForm, setSnmpForm] = useState({
-    name: '',
-    community_string: '',
-    version: 'v2c',
-    ip_range: '',
-    device_types: [],
-    location: '',
-    description: ''
-  });
-  const [snmpTestDialogOpen, setSnmpTestDialogOpen] = useState(false);
-  const [snmpTestIp, setSnmpTestIp] = useState('');
-  const [snmpTestLoading, setSnmpTestLoading] = useState(false);
-  const [snmpTestResult, setSnmpTestResult] = useState(null);
-  const [testingSnmpId, setTestingSnmpId] = useState(null);
+  // Use hooks for different config types
+  const snmpCommunity = useSettingsConfig('snmp/community');
+  const snmpV3 = useSettingsConfig('snmp/v3');
+  const openstack = useSettingsConfig('openstack');
+  const oracle = useSettingsConfig('oracle');
+  const vcenter = useSettingsConfig('vcenter');
+  const aaa = useSettingsConfig('aaa');
+  const backup = useSettingsConfig('backup');
 
-  // SNMP v3 State
-  const [snmpv3Configs, setSnmpv3Configs] = useState([]);
-  const [snmpv3DialogOpen, setSnmpv3DialogOpen] = useState(false);
-  const [editingSnmpv3, setEditingSnmpv3] = useState(null);
-  const [snmpv3Form, setSnmpv3Form] = useState({
-    name: '',
-    security_level: 'authPriv',
-    username: '',
-    auth_protocol: 'SHA',
-    auth_password: '',
-    priv_protocol: 'AES',
-    priv_password: '',
-    ip_range: '',
-    device_types: [],
-    location: '',
-    description: ''
-  });
-
-  const deviceTypeOptions = [
-    'router', 'switch', 'firewall', 'load_balancer', 
-    'server', 'virtual_machine', 'cloud_instance', 'access_point'
-  ];
+  // Dialog states
+  const [dialogOpen, setDialogOpen] = useState(false);
+  const [dialogType, setDialogType] = useState('');
+  const [editingItem, setEditingItem] = useState(null);
+  const [formData, setFormData] = useState({});
 
   // Fetch Email Configuration
-  const fetchEmailConfig = async () => {
-    try {
-      const response = await axios.get(`${API}/settings/email`, { headers: getAuthHeader() });
-      if (response.data) {
-        setEmailConfig(prev => ({
-          ...prev,
-          ...response.data,
-          password: '' // Don't pre-fill password
-        }));
-      }
-    } catch (error) {
-      // No config exists yet, use defaults
-    }
-  };
-
-  // Fetch SNMP Community Strings
-  const fetchSnmpConfigs = async () => {
-    try {
-      const response = await axios.get(`${API}/settings/snmp/community`, { headers: getAuthHeader() });
-      setSnmpConfigs(response.data);
-    } catch (error) {
-      toast.error('Failed to fetch SNMP configurations');
-    } finally {
-      setSnmpLoading(false);
-    }
-  };
-
-  // Fetch SNMP v3 Configurations
-  const fetchSnmpv3Configs = async () => {
-    try {
-      const response = await axios.get(`${API}/settings/snmp/v3`, { headers: getAuthHeader() });
-      setSnmpv3Configs(response.data);
-    } catch (error) {
-      toast.error('Failed to fetch SNMP v3 configurations');
-    }
-  };
-
   useEffect(() => {
+    const fetchEmailConfig = async () => {
+      try {
+        const response = await axios.get(`${API}/settings/email`, { headers: getAuthHeader() });
+        if (response.data) {
+          setEmailConfig(prev => ({ ...prev, ...response.data, password: '' }));
+        }
+      } catch (error) {}
+    };
     fetchEmailConfig();
-    fetchSnmpConfigs();
-    fetchSnmpv3Configs();
   }, []);
 
   // Save Email Configuration
@@ -146,7 +134,6 @@ export default function SettingsPage() {
       toast.error('Username and Sender Email are required');
       return;
     }
-
     setEmailLoading(true);
     try {
       await axios.post(`${API}/settings/email`, emailConfig, { headers: getAuthHeader() });
@@ -158,415 +145,608 @@ export default function SettingsPage() {
     }
   };
 
-  // Test Email Configuration
+  // Test Email
   const handleTestEmail = async () => {
     if (!testEmail) {
       toast.error('Please enter a test email address');
       return;
     }
-
-    setEmailTestLoading(true);
     try {
-      const response = await axios.post(
-        `${API}/settings/email/test?test_email=${encodeURIComponent(testEmail)}`,
-        {},
-        { headers: getAuthHeader() }
-      );
-      toast.success(response.data.message);
+      await axios.post(`${API}/settings/email/test?test_email=${encodeURIComponent(testEmail)}`, {}, { headers: getAuthHeader() });
+      toast.success('Test email sent successfully');
     } catch (error) {
       toast.error(error.response?.data?.detail || 'Failed to send test email');
-    } finally {
-      setEmailTestLoading(false);
     }
   };
 
-  // Save SNMP Community String
-  const handleSaveSnmpConfig = async () => {
-    if (!snmpForm.name || !snmpForm.community_string) {
-      toast.error('Name and Community String are required');
-      return;
-    }
+  // Generic form handlers
+  const openCreateDialog = (type, defaultData = {}) => {
+    setDialogType(type);
+    setEditingItem(null);
+    setFormData(defaultData);
+    setDialogOpen(true);
+  };
 
+  const openEditDialog = (type, item) => {
+    setDialogType(type);
+    setEditingItem(item);
+    setFormData({ ...item });
+    setDialogOpen(true);
+  };
+
+  const handleSaveForm = async () => {
     try {
-      if (editingSnmp) {
-        await axios.put(`${API}/settings/snmp/community/${editingSnmp.id}`, snmpForm, { headers: getAuthHeader() });
-        toast.success('SNMP configuration updated');
-      } else {
-        await axios.post(`${API}/settings/snmp/community`, snmpForm, { headers: getAuthHeader() });
-        toast.success('SNMP configuration created');
+      let hook;
+      switch (dialogType) {
+        case 'snmp_community': hook = snmpCommunity; break;
+        case 'snmp_v3': hook = snmpV3; break;
+        case 'openstack': hook = openstack; break;
+        case 'oracle': hook = oracle; break;
+        case 'vcenter': hook = vcenter; break;
+        case 'aaa': hook = aaa; break;
+        case 'backup': hook = backup; break;
+        default: return;
       }
-      setSnmpDialogOpen(false);
-      setEditingSnmp(null);
-      resetSnmpForm();
-      fetchSnmpConfigs();
-    } catch (error) {
-      toast.error(error.response?.data?.detail || 'Failed to save SNMP configuration');
-    }
-  };
 
-  // Delete SNMP Community String
-  const handleDeleteSnmpConfig = async (configId) => {
-    if (!window.confirm('Are you sure you want to delete this SNMP configuration?')) return;
-
-    try {
-      await axios.delete(`${API}/settings/snmp/community/${configId}`, { headers: getAuthHeader() });
-      toast.success('SNMP configuration deleted');
-      fetchSnmpConfigs();
-    } catch (error) {
-      toast.error('Failed to delete SNMP configuration');
-    }
-  };
-
-  // Test SNMP Community String
-  const handleTestSnmp = async () => {
-    if (!snmpTestIp) {
-      toast.error('Please enter a target IP address');
-      return;
-    }
-
-    setSnmpTestLoading(true);
-    setSnmpTestResult(null);
-    try {
-      const response = await axios.post(
-        `${API}/settings/snmp/community/${testingSnmpId}/test?target_ip=${encodeURIComponent(snmpTestIp)}`,
-        {},
-        { headers: getAuthHeader() }
-      );
-      setSnmpTestResult(response.data);
-    } catch (error) {
-      setSnmpTestResult({ success: false, message: error.response?.data?.detail || 'Test failed' });
-    } finally {
-      setSnmpTestLoading(false);
-    }
-  };
-
-  // Save SNMP v3 Configuration
-  const handleSaveSnmpv3Config = async () => {
-    if (!snmpv3Form.name || !snmpv3Form.username) {
-      toast.error('Name and Username are required');
-      return;
-    }
-
-    try {
-      if (editingSnmpv3) {
-        await axios.put(`${API}/settings/snmp/v3/${editingSnmpv3.id}`, snmpv3Form, { headers: getAuthHeader() });
-        toast.success('SNMP v3 configuration updated');
+      if (editingItem) {
+        await hook.updateConfig(editingItem.id, formData);
+        toast.success('Configuration updated');
       } else {
-        await axios.post(`${API}/settings/snmp/v3`, snmpv3Form, { headers: getAuthHeader() });
-        toast.success('SNMP v3 configuration created');
+        await hook.createConfig(formData);
+        toast.success('Configuration created');
       }
-      setSnmpv3DialogOpen(false);
-      setEditingSnmpv3(null);
-      resetSnmpv3Form();
-      fetchSnmpv3Configs();
+      setDialogOpen(false);
     } catch (error) {
-      toast.error(error.response?.data?.detail || 'Failed to save SNMP v3 configuration');
+      toast.error(error.response?.data?.detail || 'Failed to save configuration');
     }
   };
 
-  // Delete SNMP v3 Configuration
-  const handleDeleteSnmpv3Config = async (configId) => {
-    if (!window.confirm('Are you sure you want to delete this SNMP v3 configuration?')) return;
-
+  const handleDeleteConfig = async (type, id) => {
+    if (!window.confirm('Are you sure you want to delete this configuration?')) return;
     try {
-      await axios.delete(`${API}/settings/snmp/v3/${configId}`, { headers: getAuthHeader() });
-      toast.success('SNMP v3 configuration deleted');
-      fetchSnmpv3Configs();
+      let hook;
+      switch (type) {
+        case 'snmp_community': hook = snmpCommunity; break;
+        case 'snmp_v3': hook = snmpV3; break;
+        case 'openstack': hook = openstack; break;
+        case 'oracle': hook = oracle; break;
+        case 'vcenter': hook = vcenter; break;
+        case 'aaa': hook = aaa; break;
+        case 'backup': hook = backup; break;
+        default: return;
+      }
+      await hook.deleteConfig(id);
+      toast.success('Configuration deleted');
     } catch (error) {
-      toast.error('Failed to delete SNMP v3 configuration');
+      toast.error('Failed to delete configuration');
     }
   };
 
-  const resetSnmpForm = () => {
-    setSnmpForm({
-      name: '',
-      community_string: '',
-      version: 'v2c',
-      ip_range: '',
-      device_types: [],
-      location: '',
-      description: ''
-    });
+  const handleTriggerBackup = async (configId) => {
+    try {
+      await axios.post(`${API}/settings/backup/${configId}/trigger`, {}, { headers: getAuthHeader() });
+      toast.success('Backup triggered successfully');
+      backup.fetchConfigs();
+    } catch (error) {
+      toast.error('Failed to trigger backup');
+    }
   };
 
-  const resetSnmpv3Form = () => {
-    setSnmpv3Form({
-      name: '',
-      security_level: 'authPriv',
-      username: '',
-      auth_protocol: 'SHA',
-      auth_password: '',
-      priv_protocol: 'AES',
-      priv_password: '',
-      ip_range: '',
-      device_types: [],
-      location: '',
-      description: ''
-    });
+  // Config card component
+  const ConfigCard = ({ config, type, icon: Icon, iconColor, children }) => (
+    <div className="border rounded-lg p-4 flex items-start justify-between hover:bg-muted/30 transition-colors">
+      <div className="flex items-start gap-3">
+        <div className={`p-2 rounded-lg ${iconColor}`}>
+          <Icon className="h-5 w-5 text-white" />
+        </div>
+        <div className="space-y-1">
+          <div className="flex items-center gap-2">
+            <h4 className="font-medium">{config.name}</h4>
+            {config.is_active && <Badge className="bg-green-500">Active</Badge>}
+          </div>
+          {children}
+        </div>
+      </div>
+      <div className="flex gap-2">
+        <Button variant="outline" size="icon" onClick={() => openEditDialog(type, config)}>
+          <Edit className="h-4 w-4" />
+        </Button>
+        <Button variant="outline" size="icon" onClick={() => handleDeleteConfig(type, config.id)}>
+          <Trash2 className="h-4 w-4 text-red-500" />
+        </Button>
+      </div>
+    </div>
+  );
+
+  const renderDialogContent = () => {
+    switch (dialogType) {
+      case 'snmp_community':
+        return (
+          <div className="space-y-4">
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label>Name *</Label>
+                <Input value={formData.name || ''} onChange={(e) => setFormData({...formData, name: e.target.value})} placeholder="DC1-Routers" />
+              </div>
+              <div className="space-y-2">
+                <Label>Version</Label>
+                <Select value={formData.version || 'v2c'} onValueChange={(v) => setFormData({...formData, version: v})}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="v1">SNMPv1</SelectItem>
+                    <SelectItem value="v2c">SNMPv2c</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+            <div className="space-y-2">
+              <Label>Community String *</Label>
+              <Input type="password" value={formData.community_string || ''} onChange={(e) => setFormData({...formData, community_string: e.target.value})} />
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label>IP Range (CIDR)</Label>
+                <Input value={formData.ip_range || ''} onChange={(e) => setFormData({...formData, ip_range: e.target.value})} placeholder="192.168.1.0/24" />
+              </div>
+              <div className="space-y-2">
+                <Label>Location</Label>
+                <Input value={formData.location || ''} onChange={(e) => setFormData({...formData, location: e.target.value})} placeholder="Datacenter 1" />
+              </div>
+            </div>
+          </div>
+        );
+
+      case 'openstack':
+        return (
+          <div className="space-y-4">
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label>Name *</Label>
+                <Input value={formData.name || ''} onChange={(e) => setFormData({...formData, name: e.target.value})} placeholder="Production OpenStack" />
+              </div>
+              <div className="space-y-2">
+                <Label>Auth URL *</Label>
+                <Input value={formData.auth_url || ''} onChange={(e) => setFormData({...formData, auth_url: e.target.value})} placeholder="http://openstack:5000/v3" />
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label>Username *</Label>
+                <Input value={formData.username || ''} onChange={(e) => setFormData({...formData, username: e.target.value})} />
+              </div>
+              <div className="space-y-2">
+                <Label>Password *</Label>
+                <Input type="password" value={formData.password || ''} onChange={(e) => setFormData({...formData, password: e.target.value})} />
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label>Project Name *</Label>
+                <Input value={formData.project_name || ''} onChange={(e) => setFormData({...formData, project_name: e.target.value})} />
+              </div>
+              <div className="space-y-2">
+                <Label>Region</Label>
+                <Input value={formData.region_name || ''} onChange={(e) => setFormData({...formData, region_name: e.target.value})} />
+              </div>
+            </div>
+            <div className="border-t pt-4">
+              <Label className="mb-3 block">Services to Monitor</Label>
+              <div className="grid grid-cols-4 gap-3">
+                {['nova', 'neutron', 'cinder', 'keystone', 'glance', 'heat', 'swift'].map(svc => (
+                  <div key={svc} className="flex items-center gap-2">
+                    <Switch checked={formData[`monitor_${svc}`] !== false} onCheckedChange={(c) => setFormData({...formData, [`monitor_${svc}`]: c})} />
+                    <Label className="capitalize">{svc}</Label>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        );
+
+      case 'oracle':
+        return (
+          <div className="space-y-4">
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label>Name *</Label>
+                <Input value={formData.name || ''} onChange={(e) => setFormData({...formData, name: e.target.value})} placeholder="Production DB" />
+              </div>
+              <div className="space-y-2">
+                <Label>Host *</Label>
+                <Input value={formData.host || ''} onChange={(e) => setFormData({...formData, host: e.target.value})} placeholder="db.example.com" />
+              </div>
+            </div>
+            <div className="grid grid-cols-3 gap-4">
+              <div className="space-y-2">
+                <Label>Port</Label>
+                <Input type="number" value={formData.port || 1521} onChange={(e) => setFormData({...formData, port: parseInt(e.target.value)})} />
+              </div>
+              <div className="space-y-2">
+                <Label>Service Name *</Label>
+                <Input value={formData.service_name || ''} onChange={(e) => setFormData({...formData, service_name: e.target.value})} />
+              </div>
+              <div className="space-y-2">
+                <Label>Username *</Label>
+                <Input value={formData.username || ''} onChange={(e) => setFormData({...formData, username: e.target.value})} />
+              </div>
+            </div>
+            <div className="space-y-2">
+              <Label>Password *</Label>
+              <Input type="password" value={formData.password || ''} onChange={(e) => setFormData({...formData, password: e.target.value})} />
+            </div>
+            <div className="border-t pt-4">
+              <Label className="mb-3 block">Metrics to Monitor</Label>
+              <div className="grid grid-cols-4 gap-3">
+                {['tablespace', 'sessions', 'locks', 'performance', 'asm', 'dataguard', 'rman'].map(m => (
+                  <div key={m} className="flex items-center gap-2">
+                    <Switch checked={formData[`monitor_${m}`] !== false} onCheckedChange={(c) => setFormData({...formData, [`monitor_${m}`]: c})} />
+                    <Label className="capitalize">{m}</Label>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        );
+
+      case 'vcenter':
+        return (
+          <div className="space-y-4">
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label>Name *</Label>
+                <Input value={formData.name || ''} onChange={(e) => setFormData({...formData, name: e.target.value})} placeholder="vCenter Production" />
+              </div>
+              <div className="space-y-2">
+                <Label>Host *</Label>
+                <Input value={formData.host || ''} onChange={(e) => setFormData({...formData, host: e.target.value})} placeholder="vcenter.example.com" />
+              </div>
+            </div>
+            <div className="grid grid-cols-3 gap-4">
+              <div className="space-y-2">
+                <Label>Port</Label>
+                <Input type="number" value={formData.port || 443} onChange={(e) => setFormData({...formData, port: parseInt(e.target.value)})} />
+              </div>
+              <div className="space-y-2">
+                <Label>Username *</Label>
+                <Input value={formData.username || ''} onChange={(e) => setFormData({...formData, username: e.target.value})} />
+              </div>
+              <div className="space-y-2">
+                <Label>Password *</Label>
+                <Input type="password" value={formData.password || ''} onChange={(e) => setFormData({...formData, password: e.target.value})} />
+              </div>
+            </div>
+            <div className="border-t pt-4">
+              <Label className="mb-3 block">Resources to Monitor</Label>
+              <div className="grid grid-cols-3 gap-3">
+                {['vms', 'esxi_hosts', 'datastores', 'clusters', 'networks', 'resource_pools'].map(r => (
+                  <div key={r} className="flex items-center gap-2">
+                    <Switch checked={formData[`monitor_${r}`] !== false} onCheckedChange={(c) => setFormData({...formData, [`monitor_${r}`]: c})} />
+                    <Label className="capitalize">{r.replace('_', ' ')}</Label>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        );
+
+      case 'aaa':
+        return (
+          <div className="space-y-4">
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label>Name *</Label>
+                <Input value={formData.name || ''} onChange={(e) => setFormData({...formData, name: e.target.value})} placeholder="Primary RADIUS" />
+              </div>
+              <div className="space-y-2">
+                <Label>Server Type *</Label>
+                <Select value={formData.server_type || 'radius'} onValueChange={(v) => setFormData({...formData, server_type: v, primary_port: v === 'radius' ? 1812 : 49})}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="radius">RADIUS</SelectItem>
+                    <SelectItem value="tacacs">TACACS+</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label>Primary Host *</Label>
+                <Input value={formData.primary_host || ''} onChange={(e) => setFormData({...formData, primary_host: e.target.value})} placeholder="radius.example.com" />
+              </div>
+              <div className="space-y-2">
+                <Label>Primary Port</Label>
+                <Input type="number" value={formData.primary_port || (formData.server_type === 'tacacs' ? 49 : 1812)} onChange={(e) => setFormData({...formData, primary_port: parseInt(e.target.value)})} />
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label>Secondary Host</Label>
+                <Input value={formData.secondary_host || ''} onChange={(e) => setFormData({...formData, secondary_host: e.target.value})} placeholder="radius-backup.example.com" />
+              </div>
+              <div className="space-y-2">
+                <Label>Secondary Port</Label>
+                <Input type="number" value={formData.secondary_port || ''} onChange={(e) => setFormData({...formData, secondary_port: parseInt(e.target.value)})} />
+              </div>
+            </div>
+            <div className="space-y-2">
+              <Label>Shared Secret *</Label>
+              <Input type="password" value={formData.shared_secret || ''} onChange={(e) => setFormData({...formData, shared_secret: e.target.value})} />
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              <div className="flex items-center gap-2">
+                <Switch checked={formData.use_for_login !== false} onCheckedChange={(c) => setFormData({...formData, use_for_login: c})} />
+                <Label>Use for NOC Login</Label>
+              </div>
+              <div className="flex items-center gap-2">
+                <Switch checked={formData.use_for_device_auth !== false} onCheckedChange={(c) => setFormData({...formData, use_for_device_auth: c})} />
+                <Label>Use for Device Auth</Label>
+              </div>
+            </div>
+          </div>
+        );
+
+      case 'backup':
+        return (
+          <div className="space-y-4">
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label>Name *</Label>
+                <Input value={formData.name || ''} onChange={(e) => setFormData({...formData, name: e.target.value})} placeholder="Nightly Config Backup" />
+              </div>
+              <div className="space-y-2">
+                <Label>Backup Type *</Label>
+                <Select value={formData.backup_type || 'scp'} onValueChange={(v) => setFormData({...formData, backup_type: v})}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="tftp">TFTP</SelectItem>
+                    <SelectItem value="scp">SCP</SelectItem>
+                    <SelectItem value="ssh_command">SSH Command</SelectItem>
+                    <SelectItem value="api">API-based</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+            {(formData.backup_type === 'tftp' || formData.backup_type === 'scp') && (
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label>Server Host</Label>
+                  <Input value={formData.server_host || ''} onChange={(e) => setFormData({...formData, server_host: e.target.value})} placeholder="backup.example.com" />
+                </div>
+                <div className="space-y-2">
+                  <Label>Server Path</Label>
+                  <Input value={formData.server_path || ''} onChange={(e) => setFormData({...formData, server_path: e.target.value})} placeholder="/backups/network" />
+                </div>
+                {formData.backup_type === 'scp' && (
+                  <>
+                    <div className="space-y-2">
+                      <Label>Username</Label>
+                      <Input value={formData.server_username || ''} onChange={(e) => setFormData({...formData, server_username: e.target.value})} />
+                    </div>
+                    <div className="space-y-2">
+                      <Label>Password</Label>
+                      <Input type="password" value={formData.server_password || ''} onChange={(e) => setFormData({...formData, server_password: e.target.value})} />
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
+            {formData.backup_type === 'ssh_command' && (
+              <div className="space-y-2">
+                <Label>SSH Command</Label>
+                <Textarea value={formData.ssh_command || ''} onChange={(e) => setFormData({...formData, ssh_command: e.target.value})} placeholder="show running-config" rows={2} />
+              </div>
+            )}
+            {formData.backup_type === 'api' && (
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label>API Endpoint</Label>
+                  <Input value={formData.api_endpoint || ''} onChange={(e) => setFormData({...formData, api_endpoint: e.target.value})} placeholder="https://api.example.com/backup" />
+                </div>
+                <div className="space-y-2">
+                  <Label>API Key</Label>
+                  <Input type="password" value={formData.api_key || ''} onChange={(e) => setFormData({...formData, api_key: e.target.value})} />
+                </div>
+              </div>
+            )}
+            <div className="border-t pt-4">
+              <Label className="mb-3 block">Schedule</Label>
+              <div className="grid grid-cols-3 gap-4">
+                <div className="flex items-center gap-2">
+                  <Switch checked={formData.schedule_enabled === true} onCheckedChange={(c) => setFormData({...formData, schedule_enabled: c})} />
+                  <Label>Enable Schedule</Label>
+                </div>
+                {formData.schedule_enabled && (
+                  <>
+                    <div className="space-y-2">
+                      <Label>Frequency</Label>
+                      <Select value={formData.schedule_frequency || 'daily'} onValueChange={(v) => setFormData({...formData, schedule_frequency: v})}>
+                        <SelectTrigger><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="daily">Daily</SelectItem>
+                          <SelectItem value="weekly">Weekly</SelectItem>
+                          <SelectItem value="monthly">Monthly</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="space-y-2">
+                      <Label>Time (HH:MM)</Label>
+                      <Input type="time" value={formData.schedule_time || '02:00'} onChange={(e) => setFormData({...formData, schedule_time: e.target.value})} />
+                    </div>
+                  </>
+                )}
+              </div>
+            </div>
+            <div className="space-y-2">
+              <Label>Retention (days)</Label>
+              <Input type="number" value={formData.retention_days || 30} onChange={(e) => setFormData({...formData, retention_days: parseInt(e.target.value)})} />
+            </div>
+          </div>
+        );
+
+      default:
+        return null;
+    }
   };
 
-  const openEditSnmpDialog = (config) => {
-    setEditingSnmp(config);
-    setSnmpForm({
-      name: config.name,
-      community_string: '', // Don't pre-fill
-      version: config.version || 'v2c',
-      ip_range: config.ip_range || '',
-      device_types: config.device_types || [],
-      location: config.location || '',
-      description: config.description || ''
-    });
-    setSnmpDialogOpen(true);
-  };
-
-  const openEditSnmpv3Dialog = (config) => {
-    setEditingSnmpv3(config);
-    setSnmpv3Form({
-      name: config.name,
-      security_level: config.security_level || 'authPriv',
-      username: config.username,
-      auth_protocol: config.auth_protocol || 'SHA',
-      auth_password: '', // Don't pre-fill
-      priv_protocol: config.priv_protocol || 'AES',
-      priv_password: '', // Don't pre-fill
-      ip_range: config.ip_range || '',
-      device_types: config.device_types || [],
-      location: config.location || '',
-      description: config.description || ''
-    });
-    setSnmpv3DialogOpen(true);
+  const getDialogTitle = () => {
+    const titles = {
+      snmp_community: 'SNMP Community String',
+      snmp_v3: 'SNMP v3 Configuration',
+      openstack: 'OpenStack Configuration',
+      oracle: 'Oracle Database Configuration',
+      vcenter: 'vCenter Configuration',
+      aaa: 'AAA Server Configuration',
+      backup: 'Backup Configuration'
+    };
+    return `${editingItem ? 'Edit' : 'Add'} ${titles[dialogType] || 'Configuration'}`;
   };
 
   return (
     <div data-testid="settings-page" className="space-y-6">
-      {/* Header */}
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-3xl font-bold tracking-tight font-['Manrope']">Settings</h1>
-          <p className="text-muted-foreground mt-1">Configure email notifications and SNMP settings</p>
+          <p className="text-muted-foreground mt-1">Configure integrations, monitoring, and system settings</p>
         </div>
       </div>
 
-      <Tabs defaultValue="email" className="space-y-6">
-        <TabsList className="grid w-full grid-cols-3 lg:w-[500px]">
-          <TabsTrigger value="email" className="flex items-center gap-2">
-            <Mail className="h-4 w-4" />
-            Email (O365)
-          </TabsTrigger>
-          <TabsTrigger value="snmp" className="flex items-center gap-2">
-            <Network className="h-4 w-4" />
-            SNMP v1/v2c
-          </TabsTrigger>
-          <TabsTrigger value="snmpv3" className="flex items-center gap-2">
-            <Shield className="h-4 w-4" />
-            SNMP v3
-          </TabsTrigger>
-        </TabsList>
+      <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-6">
+        <ScrollArea className="w-full">
+          <TabsList className="inline-flex h-10 w-full justify-start">
+            <TabsTrigger value="email" className="flex items-center gap-2"><Mail className="h-4 w-4" />Email</TabsTrigger>
+            <TabsTrigger value="snmp" className="flex items-center gap-2"><Network className="h-4 w-4" />SNMP</TabsTrigger>
+            <TabsTrigger value="openstack" className="flex items-center gap-2"><Cloud className="h-4 w-4" />OpenStack</TabsTrigger>
+            <TabsTrigger value="oracle" className="flex items-center gap-2"><Database className="h-4 w-4" />Oracle</TabsTrigger>
+            <TabsTrigger value="vcenter" className="flex items-center gap-2"><Monitor className="h-4 w-4" />vCenter</TabsTrigger>
+            <TabsTrigger value="aaa" className="flex items-center gap-2"><Key className="h-4 w-4" />AAA</TabsTrigger>
+            <TabsTrigger value="backup" className="flex items-center gap-2"><HardDrive className="h-4 w-4" />Backup</TabsTrigger>
+          </TabsList>
+        </ScrollArea>
 
-        {/* Email Configuration Tab */}
+        {/* Email Tab */}
         <TabsContent value="email">
           <Card className="bg-white border-border/50">
             <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <Mail className="h-5 w-5 text-blue-600" />
-                Office 365 Email Configuration
-              </CardTitle>
-              <CardDescription>
-                Configure SMTP settings for sending email notifications and escalation alerts
-              </CardDescription>
+              <CardTitle className="flex items-center gap-2"><Mail className="h-5 w-5 text-blue-600" />Office 365 Email Configuration</CardTitle>
+              <CardDescription>Configure SMTP settings for email notifications and escalation alerts</CardDescription>
             </CardHeader>
             <CardContent className="space-y-6">
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                 <div className="space-y-2">
-                  <Label htmlFor="smtp_server">SMTP Server</Label>
-                  <Input
-                    id="smtp_server"
-                    value={emailConfig.smtp_server}
-                    onChange={(e) => setEmailConfig({ ...emailConfig, smtp_server: e.target.value })}
-                    placeholder="smtp.office365.com"
-                  />
+                  <Label>SMTP Server</Label>
+                  <Input value={emailConfig.smtp_server} onChange={(e) => setEmailConfig({...emailConfig, smtp_server: e.target.value})} placeholder="smtp.office365.com" />
                 </div>
                 <div className="space-y-2">
-                  <Label htmlFor="smtp_port">SMTP Port</Label>
-                  <Input
-                    id="smtp_port"
-                    type="number"
-                    value={emailConfig.smtp_port}
-                    onChange={(e) => setEmailConfig({ ...emailConfig, smtp_port: parseInt(e.target.value) })}
-                    placeholder="587"
-                  />
+                  <Label>SMTP Port</Label>
+                  <Input type="number" value={emailConfig.smtp_port} onChange={(e) => setEmailConfig({...emailConfig, smtp_port: parseInt(e.target.value)})} />
                 </div>
                 <div className="space-y-2">
-                  <Label htmlFor="username">Username (Email)</Label>
-                  <Input
-                    id="username"
-                    value={emailConfig.username}
-                    onChange={(e) => setEmailConfig({ ...emailConfig, username: e.target.value })}
-                    placeholder="noc@yourcompany.com"
-                  />
+                  <Label>Username (Email)</Label>
+                  <Input value={emailConfig.username} onChange={(e) => setEmailConfig({...emailConfig, username: e.target.value})} placeholder="noc@company.com" />
                 </div>
                 <div className="space-y-2">
-                  <Label htmlFor="password">Password / App Password</Label>
-                  <div className="relative">
-                    <Input
-                      id="password"
-                      type={showEmailPassword ? 'text' : 'password'}
-                      value={emailConfig.password}
-                      onChange={(e) => setEmailConfig({ ...emailConfig, password: e.target.value })}
-                      placeholder="Enter password or app password"
-                    />
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="icon"
-                      className="absolute right-2 top-1/2 -translate-y-1/2"
-                      onClick={() => setShowEmailPassword(!showEmailPassword)}
-                    >
-                      {showEmailPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                    </Button>
-                  </div>
+                  <Label>Password</Label>
+                  <Input type="password" value={emailConfig.password} onChange={(e) => setEmailConfig({...emailConfig, password: e.target.value})} placeholder="App password" />
                 </div>
                 <div className="space-y-2">
-                  <Label htmlFor="sender_email">Sender Email (From)</Label>
-                  <Input
-                    id="sender_email"
-                    value={emailConfig.sender_email}
-                    onChange={(e) => setEmailConfig({ ...emailConfig, sender_email: e.target.value })}
-                    placeholder="noc-alerts@yourcompany.com"
-                  />
+                  <Label>Sender Email</Label>
+                  <Input value={emailConfig.sender_email} onChange={(e) => setEmailConfig({...emailConfig, sender_email: e.target.value})} placeholder="noc-alerts@company.com" />
                 </div>
                 <div className="space-y-2">
-                  <Label htmlFor="sender_name">Sender Name</Label>
-                  <Input
-                    id="sender_name"
-                    value={emailConfig.sender_name}
-                    onChange={(e) => setEmailConfig({ ...emailConfig, sender_name: e.target.value })}
-                    placeholder="ATECH NOC Commander"
-                  />
+                  <Label>Sender Name</Label>
+                  <Input value={emailConfig.sender_name} onChange={(e) => setEmailConfig({...emailConfig, sender_name: e.target.value})} />
                 </div>
               </div>
-
-              <div className="flex items-center space-x-2">
-                <Switch
-                  id="use_tls"
-                  checked={emailConfig.use_tls}
-                  onCheckedChange={(checked) => setEmailConfig({ ...emailConfig, use_tls: checked })}
-                />
-                <Label htmlFor="use_tls">Use TLS Encryption</Label>
+              <div className="flex items-center gap-2">
+                <Switch checked={emailConfig.use_tls} onCheckedChange={(c) => setEmailConfig({...emailConfig, use_tls: c})} />
+                <Label>Use TLS Encryption</Label>
               </div>
-
-              <div className="border-t pt-6">
-                <h4 className="font-medium mb-4">Test Email Configuration</h4>
-                <div className="flex gap-3">
-                  <Input
-                    value={testEmail}
-                    onChange={(e) => setTestEmail(e.target.value)}
-                    placeholder="Enter email address to send test"
-                    className="max-w-sm"
-                  />
-                  <Button variant="outline" onClick={handleTestEmail} disabled={emailTestLoading}>
-                    {emailTestLoading ? (
-                      <Loader2 className="h-4 w-4 animate-spin mr-2" />
-                    ) : (
-                      <TestTube className="h-4 w-4 mr-2" />
-                    )}
-                    Send Test Email
-                  </Button>
+              <div className="border-t pt-6 flex items-end gap-4">
+                <div className="flex-1">
+                  <Label className="mb-2 block">Test Email</Label>
+                  <Input value={testEmail} onChange={(e) => setTestEmail(e.target.value)} placeholder="Enter email to test" />
                 </div>
-              </div>
-
-              <div className="flex justify-end">
+                <Button variant="outline" onClick={handleTestEmail}><TestTube className="h-4 w-4 mr-2" />Send Test</Button>
                 <Button onClick={handleSaveEmailConfig} disabled={emailLoading}>
-                  {emailLoading ? (
-                    <Loader2 className="h-4 w-4 animate-spin mr-2" />
-                  ) : (
-                    <Save className="h-4 w-4 mr-2" />
-                  )}
-                  Save Email Configuration
+                  {emailLoading ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <Save className="h-4 w-4 mr-2" />}
+                  Save Configuration
                 </Button>
               </div>
             </CardContent>
           </Card>
         </TabsContent>
 
-        {/* SNMP v1/v2c Tab */}
+        {/* SNMP Tab */}
         <TabsContent value="snmp">
+          <div className="space-y-6">
+            <Card className="bg-white border-border/50">
+              <CardHeader className="flex flex-row items-center justify-between">
+                <div>
+                  <CardTitle className="flex items-center gap-2"><Network className="h-5 w-5 text-purple-600" />SNMP Community Strings (v1/v2c)</CardTitle>
+                  <CardDescription>Configure community strings for device groups</CardDescription>
+                </div>
+                <Button onClick={() => openCreateDialog('snmp_community', {version: 'v2c'})}><Plus className="h-4 w-4 mr-2" />Add</Button>
+              </CardHeader>
+              <CardContent>
+                {snmpCommunity.loading ? (
+                  <div className="flex justify-center py-8"><Loader2 className="h-8 w-8 animate-spin" /></div>
+                ) : snmpCommunity.configs.length === 0 ? (
+                  <div className="text-center py-8 text-muted-foreground">No SNMP community strings configured</div>
+                ) : (
+                  <div className="space-y-3">
+                    {snmpCommunity.configs.map(config => (
+                      <ConfigCard key={config.id} config={config} type="snmp_community" icon={Network} iconColor="bg-purple-500">
+                        <p className="text-sm text-muted-foreground">Version: {config.version?.toUpperCase()} | IP Range: {config.ip_range || 'All'}</p>
+                      </ConfigCard>
+                    ))}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+            <Card className="bg-white border-border/50">
+              <CardHeader className="flex flex-row items-center justify-between">
+                <div>
+                  <CardTitle className="flex items-center gap-2"><Shield className="h-5 w-5 text-green-600" />SNMP v3 Configuration</CardTitle>
+                  <CardDescription>Secure SNMP with authentication and privacy</CardDescription>
+                </div>
+                <Button onClick={() => openCreateDialog('snmp_v3', {security_level: 'authPriv', auth_protocol: 'SHA', priv_protocol: 'AES'})}><Plus className="h-4 w-4 mr-2" />Add</Button>
+              </CardHeader>
+              <CardContent>
+                {snmpV3.configs.length === 0 ? (
+                  <div className="text-center py-8 text-muted-foreground">No SNMP v3 configurations</div>
+                ) : (
+                  <div className="space-y-3">
+                    {snmpV3.configs.map(config => (
+                      <ConfigCard key={config.id} config={config} type="snmp_v3" icon={Shield} iconColor="bg-green-500">
+                        <p className="text-sm text-muted-foreground">User: {config.username} | Security: {config.security_level}</p>
+                      </ConfigCard>
+                    ))}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          </div>
+        </TabsContent>
+
+        {/* OpenStack Tab */}
+        <TabsContent value="openstack">
           <Card className="bg-white border-border/50">
             <CardHeader className="flex flex-row items-center justify-between">
               <div>
-                <CardTitle className="flex items-center gap-2">
-                  <Network className="h-5 w-5 text-purple-600" />
-                  SNMP Community Strings
-                </CardTitle>
-                <CardDescription>
-                  Configure SNMP v1/v2c community strings for different device groups
-                </CardDescription>
+                <CardTitle className="flex items-center gap-2"><Cloud className="h-5 w-5 text-orange-600" />OpenStack Configuration</CardTitle>
+                <CardDescription>Monitor OpenStack services: Nova, Neutron, Cinder, Keystone, Glance, Heat, Swift</CardDescription>
               </div>
-              <Button onClick={() => { resetSnmpForm(); setEditingSnmp(null); setSnmpDialogOpen(true); }}>
-                <Plus className="h-4 w-4 mr-2" />
-                Add Community String
-              </Button>
+              <Button onClick={() => openCreateDialog('openstack', {monitor_nova: true, monitor_neutron: true, monitor_cinder: true, monitor_keystone: true, monitor_glance: true, monitor_heat: true, monitor_swift: true})}><Plus className="h-4 w-4 mr-2" />Add</Button>
             </CardHeader>
             <CardContent>
-              {snmpLoading ? (
-                <div className="flex items-center justify-center py-8">
-                  <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
-                </div>
-              ) : snmpConfigs.length === 0 ? (
-                <div className="text-center py-8 text-muted-foreground">
-                  <Network className="h-12 w-12 mx-auto mb-4 opacity-50" />
-                  <p>No SNMP community strings configured</p>
-                  <p className="text-sm">Add your first community string to enable SNMP discovery</p>
-                </div>
+              {openstack.configs.length === 0 ? (
+                <div className="text-center py-8 text-muted-foreground">No OpenStack configurations</div>
               ) : (
-                <div className="space-y-4">
-                  {snmpConfigs.map((config) => (
-                    <div key={config.id} className="border rounded-lg p-4 flex items-start justify-between">
-                      <div className="space-y-1">
-                        <div className="flex items-center gap-2">
-                          <h4 className="font-medium">{config.name}</h4>
-                          <Badge variant="outline">{config.version?.toUpperCase() || 'v2c'}</Badge>
-                          {config.is_active && <Badge className="bg-green-500">Active</Badge>}
-                        </div>
-                        <p className="text-sm text-muted-foreground">
-                          Community: <code className="bg-muted px-1 rounded">{config.community_string}</code>
-                        </p>
-                        {config.ip_range && (
-                          <p className="text-sm text-muted-foreground">IP Range: {config.ip_range}</p>
-                        )}
-                        {config.location && (
-                          <p className="text-sm text-muted-foreground">Location: {config.location}</p>
-                        )}
-                        {config.device_types?.length > 0 && (
-                          <div className="flex gap-1 flex-wrap mt-2">
-                            {config.device_types.map((type) => (
-                              <Badge key={type} variant="secondary" className="text-xs">{type}</Badge>
-                            ))}
-                          </div>
-                        )}
-                      </div>
-                      <div className="flex gap-2">
-                        <Button
-                          variant="outline"
-                          size="icon"
-                          onClick={() => {
-                            setTestingSnmpId(config.id);
-                            setSnmpTestIp('');
-                            setSnmpTestResult(null);
-                            setSnmpTestDialogOpen(true);
-                          }}
-                          title="Test SNMP"
-                        >
-                          <TestTube className="h-4 w-4" />
-                        </Button>
-                        <Button variant="outline" size="icon" onClick={() => openEditSnmpDialog(config)}>
-                          <Edit className="h-4 w-4" />
-                        </Button>
-                        <Button variant="outline" size="icon" onClick={() => handleDeleteSnmpConfig(config.id)}>
-                          <Trash2 className="h-4 w-4 text-red-500" />
-                        </Button>
-                      </div>
-                    </div>
+                <div className="space-y-3">
+                  {openstack.configs.map(config => (
+                    <ConfigCard key={config.id} config={config} type="openstack" icon={Cloud} iconColor="bg-orange-500">
+                      <p className="text-sm text-muted-foreground">URL: {config.auth_url} | Project: {config.project_name}</p>
+                    </ConfigCard>
                   ))}
                 </div>
               )}
@@ -574,59 +754,126 @@ export default function SettingsPage() {
           </Card>
         </TabsContent>
 
-        {/* SNMP v3 Tab */}
-        <TabsContent value="snmpv3">
+        {/* Oracle Tab */}
+        <TabsContent value="oracle">
           <Card className="bg-white border-border/50">
             <CardHeader className="flex flex-row items-center justify-between">
               <div>
-                <CardTitle className="flex items-center gap-2">
-                  <Shield className="h-5 w-5 text-green-600" />
-                  SNMP v3 Configuration
-                </CardTitle>
-                <CardDescription>
-                  Configure SNMP v3 with authentication and privacy for enhanced security
-                </CardDescription>
+                <CardTitle className="flex items-center gap-2"><Database className="h-5 w-5 text-red-600" />Oracle Database Configuration</CardTitle>
+                <CardDescription>Monitor tablespace, sessions, locks, performance, ASM, DataGuard, RMAN</CardDescription>
               </div>
-              <Button onClick={() => { resetSnmpv3Form(); setEditingSnmpv3(null); setSnmpv3DialogOpen(true); }}>
-                <Plus className="h-4 w-4 mr-2" />
-                Add SNMP v3 Config
-              </Button>
+              <Button onClick={() => openCreateDialog('oracle', {port: 1521, monitor_tablespace: true, monitor_sessions: true, monitor_locks: true, monitor_performance: true})}><Plus className="h-4 w-4 mr-2" />Add</Button>
             </CardHeader>
             <CardContent>
-              {snmpv3Configs.length === 0 ? (
-                <div className="text-center py-8 text-muted-foreground">
-                  <Shield className="h-12 w-12 mx-auto mb-4 opacity-50" />
-                  <p>No SNMP v3 configurations</p>
-                  <p className="text-sm">Add SNMP v3 for secure device monitoring</p>
-                </div>
+              {oracle.configs.length === 0 ? (
+                <div className="text-center py-8 text-muted-foreground">No Oracle configurations</div>
               ) : (
-                <div className="space-y-4">
-                  {snmpv3Configs.map((config) => (
-                    <div key={config.id} className="border rounded-lg p-4 flex items-start justify-between">
-                      <div className="space-y-1">
-                        <div className="flex items-center gap-2">
-                          <h4 className="font-medium">{config.name}</h4>
-                          <Badge variant="outline">{config.security_level}</Badge>
-                          {config.is_active && <Badge className="bg-green-500">Active</Badge>}
+                <div className="space-y-3">
+                  {oracle.configs.map(config => (
+                    <ConfigCard key={config.id} config={config} type="oracle" icon={Database} iconColor="bg-red-500">
+                      <p className="text-sm text-muted-foreground">Host: {config.host}:{config.port} | Service: {config.service_name}</p>
+                    </ConfigCard>
+                  ))}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        {/* vCenter Tab */}
+        <TabsContent value="vcenter">
+          <Card className="bg-white border-border/50">
+            <CardHeader className="flex flex-row items-center justify-between">
+              <div>
+                <CardTitle className="flex items-center gap-2"><Monitor className="h-5 w-5 text-blue-600" />VMware vCenter Configuration</CardTitle>
+                <CardDescription>Monitor VMs, ESXi hosts, datastores, clusters, networks</CardDescription>
+              </div>
+              <Button onClick={() => openCreateDialog('vcenter', {port: 443, monitor_vms: true, monitor_esxi_hosts: true, monitor_datastores: true, monitor_clusters: true})}><Plus className="h-4 w-4 mr-2" />Add</Button>
+            </CardHeader>
+            <CardContent>
+              {vcenter.configs.length === 0 ? (
+                <div className="text-center py-8 text-muted-foreground">No vCenter configurations</div>
+              ) : (
+                <div className="space-y-3">
+                  {vcenter.configs.map(config => (
+                    <ConfigCard key={config.id} config={config} type="vcenter" icon={Monitor} iconColor="bg-blue-500">
+                      <p className="text-sm text-muted-foreground">Host: {config.host}:{config.port}</p>
+                    </ConfigCard>
+                  ))}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        {/* AAA Tab */}
+        <TabsContent value="aaa">
+          <Card className="bg-white border-border/50">
+            <CardHeader className="flex flex-row items-center justify-between">
+              <div>
+                <CardTitle className="flex items-center gap-2"><Key className="h-5 w-5 text-yellow-600" />AAA Server Configuration</CardTitle>
+                <CardDescription>Configure RADIUS and TACACS+ authentication servers</CardDescription>
+              </div>
+              <Button onClick={() => openCreateDialog('aaa', {server_type: 'radius', primary_port: 1812, use_for_login: true, use_for_device_auth: true})}><Plus className="h-4 w-4 mr-2" />Add</Button>
+            </CardHeader>
+            <CardContent>
+              {aaa.configs.length === 0 ? (
+                <div className="text-center py-8 text-muted-foreground">No AAA server configurations</div>
+              ) : (
+                <div className="space-y-3">
+                  {aaa.configs.map(config => (
+                    <ConfigCard key={config.id} config={config} type="aaa" icon={Key} iconColor="bg-yellow-500">
+                      <p className="text-sm text-muted-foreground">{config.server_type?.toUpperCase()} | Primary: {config.primary_host}:{config.primary_port}</p>
+                    </ConfigCard>
+                  ))}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        {/* Backup Tab */}
+        <TabsContent value="backup">
+          <Card className="bg-white border-border/50">
+            <CardHeader className="flex flex-row items-center justify-between">
+              <div>
+                <CardTitle className="flex items-center gap-2"><HardDrive className="h-5 w-5 text-indigo-600" />Backup Configuration</CardTitle>
+                <CardDescription>Configure backup schedules for devices and applications (TFTP, SCP, SSH, API)</CardDescription>
+              </div>
+              <Button onClick={() => openCreateDialog('backup', {backup_type: 'scp', retention_days: 30})}><Plus className="h-4 w-4 mr-2" />Add</Button>
+            </CardHeader>
+            <CardContent>
+              {backup.configs.length === 0 ? (
+                <div className="text-center py-8 text-muted-foreground">No backup configurations</div>
+              ) : (
+                <div className="space-y-3">
+                  {backup.configs.map(config => (
+                    <div key={config.id} className="border rounded-lg p-4 flex items-start justify-between hover:bg-muted/30 transition-colors">
+                      <div className="flex items-start gap-3">
+                        <div className="p-2 rounded-lg bg-indigo-500">
+                          <HardDrive className="h-5 w-5 text-white" />
                         </div>
-                        <p className="text-sm text-muted-foreground">
-                          Username: <code className="bg-muted px-1 rounded">{config.username}</code>
-                        </p>
-                        <p className="text-sm text-muted-foreground">
-                          Auth: {config.auth_protocol} | Privacy: {config.priv_protocol}
-                        </p>
-                        {config.ip_range && (
-                          <p className="text-sm text-muted-foreground">IP Range: {config.ip_range}</p>
-                        )}
-                        {config.location && (
-                          <p className="text-sm text-muted-foreground">Location: {config.location}</p>
-                        )}
+                        <div className="space-y-1">
+                          <div className="flex items-center gap-2">
+                            <h4 className="font-medium">{config.name}</h4>
+                            <Badge variant="outline">{config.backup_type?.toUpperCase()}</Badge>
+                            {config.schedule_enabled && <Badge className="bg-blue-500"><Calendar className="h-3 w-3 mr-1" />{config.schedule_frequency}</Badge>}
+                            {config.is_active && <Badge className="bg-green-500">Active</Badge>}
+                          </div>
+                          <p className="text-sm text-muted-foreground">
+                            {config.server_host && `Server: ${config.server_host}`}
+                            {config.last_status && ` | Last: ${config.last_status}`}
+                          </p>
+                        </div>
                       </div>
                       <div className="flex gap-2">
-                        <Button variant="outline" size="icon" onClick={() => openEditSnmpv3Dialog(config)}>
+                        <Button variant="outline" size="icon" onClick={() => handleTriggerBackup(config.id)} title="Trigger Backup">
+                          <Play className="h-4 w-4 text-green-500" />
+                        </Button>
+                        <Button variant="outline" size="icon" onClick={() => openEditDialog('backup', config)}>
                           <Edit className="h-4 w-4" />
                         </Button>
-                        <Button variant="outline" size="icon" onClick={() => handleDeleteSnmpv3Config(config.id)}>
+                        <Button variant="outline" size="icon" onClick={() => handleDeleteConfig('backup', config.id)}>
                           <Trash2 className="h-4 w-4 text-red-500" />
                         </Button>
                       </div>
@@ -639,323 +886,16 @@ export default function SettingsPage() {
         </TabsContent>
       </Tabs>
 
-      {/* SNMP Community String Dialog */}
-      <Dialog open={snmpDialogOpen} onOpenChange={setSnmpDialogOpen}>
-        <DialogContent className="sm:max-w-[550px]">
+      {/* Generic Dialog */}
+      <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+        <DialogContent className="sm:max-w-[600px] max-h-[80vh] overflow-y-auto">
           <DialogHeader>
-            <DialogTitle>{editingSnmp ? 'Edit' : 'Add'} SNMP Community String</DialogTitle>
-            <DialogDescription>
-              Configure SNMP v1/v2c community string for device monitoring
-            </DialogDescription>
+            <DialogTitle>{getDialogTitle()}</DialogTitle>
           </DialogHeader>
-          <div className="space-y-4 py-4">
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <Label htmlFor="snmp-name">Configuration Name *</Label>
-                <Input
-                  id="snmp-name"
-                  value={snmpForm.name}
-                  onChange={(e) => setSnmpForm({ ...snmpForm, name: e.target.value })}
-                  placeholder="e.g., DC1-Routers"
-                />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="snmp-version">SNMP Version</Label>
-                <Select value={snmpForm.version} onValueChange={(v) => setSnmpForm({ ...snmpForm, version: v })}>
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="v1">SNMPv1</SelectItem>
-                    <SelectItem value="v2c">SNMPv2c</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="community-string">Community String *</Label>
-              <Input
-                id="community-string"
-                type="password"
-                value={snmpForm.community_string}
-                onChange={(e) => setSnmpForm({ ...snmpForm, community_string: e.target.value })}
-                placeholder="Enter community string"
-              />
-            </div>
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <Label htmlFor="ip-range">IP Range (CIDR)</Label>
-                <Input
-                  id="ip-range"
-                  value={snmpForm.ip_range}
-                  onChange={(e) => setSnmpForm({ ...snmpForm, ip_range: e.target.value })}
-                  placeholder="e.g., 192.168.1.0/24"
-                />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="location">Location</Label>
-                <Input
-                  id="location"
-                  value={snmpForm.location}
-                  onChange={(e) => setSnmpForm({ ...snmpForm, location: e.target.value })}
-                  placeholder="e.g., Datacenter 1"
-                />
-              </div>
-            </div>
-            <div className="space-y-2">
-              <Label>Device Types (optional)</Label>
-              <div className="flex flex-wrap gap-2">
-                {deviceTypeOptions.map((type) => (
-                  <Badge
-                    key={type}
-                    variant={snmpForm.device_types.includes(type) ? 'default' : 'outline'}
-                    className="cursor-pointer"
-                    onClick={() => {
-                      const types = snmpForm.device_types.includes(type)
-                        ? snmpForm.device_types.filter(t => t !== type)
-                        : [...snmpForm.device_types, type];
-                      setSnmpForm({ ...snmpForm, device_types: types });
-                    }}
-                  >
-                    {type}
-                  </Badge>
-                ))}
-              </div>
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="description">Description</Label>
-              <Textarea
-                id="description"
-                value={snmpForm.description}
-                onChange={(e) => setSnmpForm({ ...snmpForm, description: e.target.value })}
-                placeholder="Optional description"
-                rows={2}
-              />
-            </div>
-          </div>
+          <div className="py-4">{renderDialogContent()}</div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setSnmpDialogOpen(false)}>Cancel</Button>
-            <Button onClick={handleSaveSnmpConfig}>
-              <Save className="h-4 w-4 mr-2" />
-              {editingSnmp ? 'Update' : 'Create'}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      {/* SNMP Test Dialog */}
-      <Dialog open={snmpTestDialogOpen} onOpenChange={setSnmpTestDialogOpen}>
-        <DialogContent className="sm:max-w-[450px]">
-          <DialogHeader>
-            <DialogTitle>Test SNMP Connection</DialogTitle>
-            <DialogDescription>
-              Enter a device IP to test the SNMP community string
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-4 py-4">
-            <div className="space-y-2">
-              <Label htmlFor="test-ip">Target Device IP</Label>
-              <Input
-                id="test-ip"
-                value={snmpTestIp}
-                onChange={(e) => setSnmpTestIp(e.target.value)}
-                placeholder="e.g., 192.168.1.1"
-              />
-            </div>
-            {snmpTestResult && (
-              <div className={`p-4 rounded-lg ${snmpTestResult.success ? 'bg-green-50 border-green-200' : 'bg-red-50 border-red-200'} border`}>
-                <div className="flex items-center gap-2 mb-2">
-                  {snmpTestResult.success ? (
-                    <CheckCircle2 className="h-5 w-5 text-green-600" />
-                  ) : (
-                    <XCircle className="h-5 w-5 text-red-600" />
-                  )}
-                  <span className={`font-medium ${snmpTestResult.success ? 'text-green-700' : 'text-red-700'}`}>
-                    {snmpTestResult.success ? 'Connection Successful' : 'Connection Failed'}
-                  </span>
-                </div>
-                <p className="text-sm text-muted-foreground">{snmpTestResult.message}</p>
-                {snmpTestResult.device_description && (
-                  <p className="text-sm mt-2">
-                    <span className="font-medium">Device:</span> {snmpTestResult.device_description}
-                  </p>
-                )}
-              </div>
-            )}
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setSnmpTestDialogOpen(false)}>Close</Button>
-            <Button onClick={handleTestSnmp} disabled={snmpTestLoading}>
-              {snmpTestLoading ? (
-                <Loader2 className="h-4 w-4 animate-spin mr-2" />
-              ) : (
-                <TestTube className="h-4 w-4 mr-2" />
-              )}
-              Test Connection
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      {/* SNMP v3 Dialog */}
-      <Dialog open={snmpv3DialogOpen} onOpenChange={setSnmpv3DialogOpen}>
-        <DialogContent className="sm:max-w-[600px]">
-          <DialogHeader>
-            <DialogTitle>{editingSnmpv3 ? 'Edit' : 'Add'} SNMP v3 Configuration</DialogTitle>
-            <DialogDescription>
-              Configure SNMP v3 with authentication and privacy settings
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-4 py-4 max-h-[60vh] overflow-y-auto">
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <Label htmlFor="v3-name">Configuration Name *</Label>
-                <Input
-                  id="v3-name"
-                  value={snmpv3Form.name}
-                  onChange={(e) => setSnmpv3Form({ ...snmpv3Form, name: e.target.value })}
-                  placeholder="e.g., Secure-Core-Devices"
-                />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="v3-security">Security Level</Label>
-                <Select value={snmpv3Form.security_level} onValueChange={(v) => setSnmpv3Form({ ...snmpv3Form, security_level: v })}>
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="noAuthNoPriv">No Auth, No Privacy</SelectItem>
-                    <SelectItem value="authNoPriv">Auth, No Privacy</SelectItem>
-                    <SelectItem value="authPriv">Auth + Privacy</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="v3-username">Username *</Label>
-              <Input
-                id="v3-username"
-                value={snmpv3Form.username}
-                onChange={(e) => setSnmpv3Form({ ...snmpv3Form, username: e.target.value })}
-                placeholder="SNMP v3 username"
-              />
-            </div>
-            {snmpv3Form.security_level !== 'noAuthNoPriv' && (
-              <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-2">
-                  <Label htmlFor="v3-auth-protocol">Auth Protocol</Label>
-                  <Select value={snmpv3Form.auth_protocol} onValueChange={(v) => setSnmpv3Form({ ...snmpv3Form, auth_protocol: v })}>
-                    <SelectTrigger>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="MD5">MD5</SelectItem>
-                      <SelectItem value="SHA">SHA</SelectItem>
-                      <SelectItem value="SHA224">SHA-224</SelectItem>
-                      <SelectItem value="SHA256">SHA-256</SelectItem>
-                      <SelectItem value="SHA384">SHA-384</SelectItem>
-                      <SelectItem value="SHA512">SHA-512</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="v3-auth-password">Auth Password</Label>
-                  <Input
-                    id="v3-auth-password"
-                    type="password"
-                    value={snmpv3Form.auth_password}
-                    onChange={(e) => setSnmpv3Form({ ...snmpv3Form, auth_password: e.target.value })}
-                    placeholder="Authentication password"
-                  />
-                </div>
-              </div>
-            )}
-            {snmpv3Form.security_level === 'authPriv' && (
-              <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-2">
-                  <Label htmlFor="v3-priv-protocol">Privacy Protocol</Label>
-                  <Select value={snmpv3Form.priv_protocol} onValueChange={(v) => setSnmpv3Form({ ...snmpv3Form, priv_protocol: v })}>
-                    <SelectTrigger>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="DES">DES</SelectItem>
-                      <SelectItem value="3DES">3DES</SelectItem>
-                      <SelectItem value="AES">AES-128</SelectItem>
-                      <SelectItem value="AES192">AES-192</SelectItem>
-                      <SelectItem value="AES256">AES-256</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="v3-priv-password">Privacy Password</Label>
-                  <Input
-                    id="v3-priv-password"
-                    type="password"
-                    value={snmpv3Form.priv_password}
-                    onChange={(e) => setSnmpv3Form({ ...snmpv3Form, priv_password: e.target.value })}
-                    placeholder="Privacy/encryption password"
-                  />
-                </div>
-              </div>
-            )}
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <Label htmlFor="v3-ip-range">IP Range (CIDR)</Label>
-                <Input
-                  id="v3-ip-range"
-                  value={snmpv3Form.ip_range}
-                  onChange={(e) => setSnmpv3Form({ ...snmpv3Form, ip_range: e.target.value })}
-                  placeholder="e.g., 10.0.0.0/8"
-                />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="v3-location">Location</Label>
-                <Input
-                  id="v3-location"
-                  value={snmpv3Form.location}
-                  onChange={(e) => setSnmpv3Form({ ...snmpv3Form, location: e.target.value })}
-                  placeholder="e.g., Core Network"
-                />
-              </div>
-            </div>
-            <div className="space-y-2">
-              <Label>Device Types (optional)</Label>
-              <div className="flex flex-wrap gap-2">
-                {deviceTypeOptions.map((type) => (
-                  <Badge
-                    key={type}
-                    variant={snmpv3Form.device_types.includes(type) ? 'default' : 'outline'}
-                    className="cursor-pointer"
-                    onClick={() => {
-                      const types = snmpv3Form.device_types.includes(type)
-                        ? snmpv3Form.device_types.filter(t => t !== type)
-                        : [...snmpv3Form.device_types, type];
-                      setSnmpv3Form({ ...snmpv3Form, device_types: types });
-                    }}
-                  >
-                    {type}
-                  </Badge>
-                ))}
-              </div>
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="v3-description">Description</Label>
-              <Textarea
-                id="v3-description"
-                value={snmpv3Form.description}
-                onChange={(e) => setSnmpv3Form({ ...snmpv3Form, description: e.target.value })}
-                placeholder="Optional description"
-                rows={2}
-              />
-            </div>
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setSnmpv3DialogOpen(false)}>Cancel</Button>
-            <Button onClick={handleSaveSnmpv3Config}>
-              <Save className="h-4 w-4 mr-2" />
-              {editingSnmpv3 ? 'Update' : 'Create'}
-            </Button>
+            <Button variant="outline" onClick={() => setDialogOpen(false)}>Cancel</Button>
+            <Button onClick={handleSaveForm}><Save className="h-4 w-4 mr-2" />{editingItem ? 'Update' : 'Create'}</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

@@ -1,4 +1,4 @@
-from fastapi import FastAPI, APIRouter, HTTPException, Depends, status, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, APIRouter, HTTPException, Depends, status, WebSocket, WebSocketDisconnect, Response
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
@@ -438,6 +438,249 @@ class SNMPv3ConfigCreate(BaseModel):
 # Create settings router
 settings_router = APIRouter(prefix="/settings", tags=["Settings"])
 
+# ===================== ADDITIONAL SETTINGS MODELS =====================
+
+class OpenStackConfig(BaseModel):
+    """OpenStack Configuration"""
+    model_config = ConfigDict(extra="ignore")
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    name: str
+    auth_url: str  # e.g., http://openstack.example.com:5000/v3
+    username: str
+    password: str
+    project_name: str
+    user_domain_name: str = "Default"
+    project_domain_name: str = "Default"
+    region_name: Optional[str] = None
+    # Services to monitor
+    monitor_nova: bool = True
+    monitor_neutron: bool = True
+    monitor_cinder: bool = True
+    monitor_keystone: bool = True
+    monitor_glance: bool = True
+    monitor_heat: bool = True
+    monitor_swift: bool = True
+    is_active: bool = True
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+class OpenStackConfigCreate(BaseModel):
+    name: str
+    auth_url: str
+    username: str
+    password: str
+    project_name: str
+    user_domain_name: str = "Default"
+    project_domain_name: str = "Default"
+    region_name: Optional[str] = None
+    monitor_nova: bool = True
+    monitor_neutron: bool = True
+    monitor_cinder: bool = True
+    monitor_keystone: bool = True
+    monitor_glance: bool = True
+    monitor_heat: bool = True
+    monitor_swift: bool = True
+
+class OracleDBConfig(BaseModel):
+    """Oracle Database Configuration"""
+    model_config = ConfigDict(extra="ignore")
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    name: str
+    host: str
+    port: int = 1521
+    service_name: str
+    username: str
+    password: str
+    # Metrics to monitor
+    monitor_tablespace: bool = True
+    monitor_sessions: bool = True
+    monitor_locks: bool = True
+    monitor_performance: bool = True
+    monitor_asm: bool = True
+    monitor_dataguard: bool = False
+    monitor_rman: bool = True
+    alert_threshold_tablespace: int = 80  # Percentage
+    alert_threshold_sessions: int = 90  # Percentage of max
+    is_active: bool = True
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+class OracleDBConfigCreate(BaseModel):
+    name: str
+    host: str
+    port: int = 1521
+    service_name: str
+    username: str
+    password: str
+    monitor_tablespace: bool = True
+    monitor_sessions: bool = True
+    monitor_locks: bool = True
+    monitor_performance: bool = True
+    monitor_asm: bool = True
+    monitor_dataguard: bool = False
+    monitor_rman: bool = True
+    alert_threshold_tablespace: int = 80
+    alert_threshold_sessions: int = 90
+
+class VCenterConfig(BaseModel):
+    """VMware vCenter Configuration"""
+    model_config = ConfigDict(extra="ignore")
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    name: str
+    host: str
+    port: int = 443
+    username: str
+    password: str
+    # Monitoring options
+    monitor_vms: bool = True
+    monitor_esxi_hosts: bool = True
+    monitor_datastores: bool = True
+    monitor_clusters: bool = True
+    monitor_networks: bool = True
+    monitor_resource_pools: bool = True
+    # Alert thresholds
+    alert_threshold_cpu: int = 80
+    alert_threshold_memory: int = 85
+    alert_threshold_datastore: int = 80
+    is_active: bool = True
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+class VCenterConfigCreate(BaseModel):
+    name: str
+    host: str
+    port: int = 443
+    username: str
+    password: str
+    monitor_vms: bool = True
+    monitor_esxi_hosts: bool = True
+    monitor_datastores: bool = True
+    monitor_clusters: bool = True
+    monitor_networks: bool = True
+    monitor_resource_pools: bool = True
+    alert_threshold_cpu: int = 80
+    alert_threshold_memory: int = 85
+    alert_threshold_datastore: int = 80
+
+class AAAServerConfig(BaseModel):
+    """AAA Server Configuration (RADIUS/TACACS+)"""
+    model_config = ConfigDict(extra="ignore")
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    name: str
+    server_type: str  # "radius" or "tacacs"
+    primary_host: str
+    primary_port: int = 1812  # RADIUS: 1812, TACACS: 49
+    secondary_host: Optional[str] = None
+    secondary_port: Optional[int] = None
+    shared_secret: str
+    timeout: int = 5  # seconds
+    retries: int = 3
+    use_for_login: bool = True
+    use_for_device_auth: bool = True
+    is_active: bool = True
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+class AAAServerConfigCreate(BaseModel):
+    name: str
+    server_type: str  # "radius" or "tacacs"
+    primary_host: str
+    primary_port: int = 1812
+    secondary_host: Optional[str] = None
+    secondary_port: Optional[int] = None
+    shared_secret: str
+    timeout: int = 5
+    retries: int = 3
+    use_for_login: bool = True
+    use_for_device_auth: bool = True
+
+class BackupConfig(BaseModel):
+    """Backup Configuration"""
+    model_config = ConfigDict(extra="ignore")
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    name: str
+    backup_type: str  # "tftp", "scp", "ssh_command", "api"
+    # For TFTP/SCP
+    server_host: Optional[str] = None
+    server_port: Optional[int] = None
+    server_username: Optional[str] = None
+    server_password: Optional[str] = None
+    server_path: Optional[str] = None
+    # For SSH command-based
+    ssh_command: Optional[str] = None
+    # For API-based
+    api_endpoint: Optional[str] = None
+    api_key: Optional[str] = None
+    api_method: str = "POST"
+    # Scheduling
+    schedule_enabled: bool = False
+    schedule_cron: Optional[str] = None  # Cron expression
+    schedule_frequency: Optional[str] = None  # "daily", "weekly", "monthly"
+    schedule_time: Optional[str] = None  # HH:MM format
+    retention_days: int = 30
+    # Target devices/applications
+    target_type: str = "device"  # "device", "application", "all"
+    target_ids: List[str] = []
+    is_active: bool = True
+    last_run: Optional[datetime] = None
+    last_status: Optional[str] = None
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+class BackupConfigCreate(BaseModel):
+    name: str
+    backup_type: str
+    server_host: Optional[str] = None
+    server_port: Optional[int] = None
+    server_username: Optional[str] = None
+    server_password: Optional[str] = None
+    server_path: Optional[str] = None
+    ssh_command: Optional[str] = None
+    api_endpoint: Optional[str] = None
+    api_key: Optional[str] = None
+    api_method: str = "POST"
+    schedule_enabled: bool = False
+    schedule_cron: Optional[str] = None
+    schedule_frequency: Optional[str] = None
+    schedule_time: Optional[str] = None
+    retention_days: int = 30
+    target_type: str = "device"
+    target_ids: List[str] = []
+
+class CustomDashboard(BaseModel):
+    """Custom Dashboard Configuration"""
+    model_config = ConfigDict(extra="ignore")
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    name: str
+    application_id: Optional[str] = None
+    application_type: Optional[str] = None  # "openstack", "oracle", "vcenter", "custom"
+    template_type: Optional[str] = None  # "monitoring", "performance", "capacity", "custom"
+    layout: List[Dict[str, Any]] = []  # Widget positions and configs
+    widgets: List[Dict[str, Any]] = []  # Widget definitions
+    is_default: bool = False
+    created_by: str = ""
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+class CustomDashboardCreate(BaseModel):
+    name: str
+    application_id: Optional[str] = None
+    application_type: Optional[str] = None
+    template_type: Optional[str] = None
+    layout: List[Dict[str, Any]] = []
+    widgets: List[Dict[str, Any]] = []
+    is_default: bool = False
+
+class IncidentAction(BaseModel):
+    """Incident Action for AI Agent"""
+    model_config = ConfigDict(extra="ignore")
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    incident_id: str
+    action_type: str  # "auto_resolve", "reboot_required", "link_reset", "hardware_failure"
+    description: str
+    requires_confirmation: bool = False
+    confirmation_status: Optional[str] = None  # "pending", "approved", "rejected"
+    confirmed_by: Optional[str] = None
+    executed: bool = False
+    executed_at: Optional[datetime] = None
+    result: Optional[str] = None
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
 # ===================== HELPER FUNCTIONS =====================
 def hash_password(password: str) -> str:
     return bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
@@ -850,6 +1093,128 @@ async def generate_report(report_type: str, period_start: str, period_end: str, 
     await db.reports.insert_one(report_dict)
     
     return report
+
+@reports_router.get("/{report_id}/download/pdf")
+async def download_report_pdf(report_id: str, current_user: dict = Depends(get_current_user)):
+    """Download report as PDF"""
+    from io import BytesIO
+    from reportlab.lib.pagesizes import letter, A4
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.lib.units import inch
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+    from reportlab.lib import colors
+    
+    report = await db.reports.find_one({"id": report_id}, {"_id": 0})
+    if not report:
+        raise HTTPException(status_code=404, detail="Report not found")
+    
+    # Create PDF
+    buffer = BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=72, leftMargin=72, topMargin=72, bottomMargin=72)
+    
+    styles = getSampleStyleSheet()
+    title_style = ParagraphStyle('CustomTitle', parent=styles['Heading1'], fontSize=18, spaceAfter=30, textColor=colors.HexColor('#1e40af'))
+    subtitle_style = ParagraphStyle('CustomSubtitle', parent=styles['Normal'], fontSize=10, textColor=colors.gray, spaceAfter=20)
+    heading_style = ParagraphStyle('CustomHeading', parent=styles['Heading2'], fontSize=14, spaceBefore=15, spaceAfter=10)
+    
+    elements = []
+    
+    # Title
+    elements.append(Paragraph(f"ATECH NOC Commander", title_style))
+    elements.append(Paragraph(report.get('title', 'Report'), styles['Heading2']))
+    elements.append(Spacer(1, 10))
+    
+    # Metadata
+    elements.append(Paragraph(f"Report Type: {report.get('type', '').replace('_', ' ').title()}", subtitle_style))
+    elements.append(Paragraph(f"Period: {report.get('period_start', '')} to {report.get('period_end', '')}", subtitle_style))
+    elements.append(Paragraph(f"Generated By: {report.get('generated_by', 'System')}", subtitle_style))
+    elements.append(Paragraph(f"Generated At: {report.get('created_at', '')}", subtitle_style))
+    elements.append(Spacer(1, 20))
+    
+    # Content
+    content = report.get('content', {})
+    if content:
+        elements.append(Paragraph("Report Summary", heading_style))
+        
+        # Convert content to table
+        table_data = [['Metric', 'Value']]
+        for key, value in content.items():
+            if isinstance(value, dict):
+                for k, v in value.items():
+                    table_data.append([f"  {k.replace('_', ' ').title()}", str(v)])
+            else:
+                table_data.append([key.replace('_', ' ').title(), str(value)])
+        
+        table = Table(table_data, colWidths=[3*inch, 2*inch])
+        table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#1e40af')),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+            ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, 0), 12),
+            ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+            ('BACKGROUND', (0, 1), (-1, -1), colors.HexColor('#f8fafc')),
+            ('GRID', (0, 0), (-1, -1), 1, colors.HexColor('#e2e8f0')),
+            ('FONTSIZE', (0, 1), (-1, -1), 10),
+            ('TOPPADDING', (0, 1), (-1, -1), 8),
+            ('BOTTOMPADDING', (0, 1), (-1, -1), 8),
+        ]))
+        elements.append(table)
+    
+    elements.append(Spacer(1, 30))
+    elements.append(Paragraph("--- End of Report ---", subtitle_style))
+    
+    doc.build(elements)
+    buffer.seek(0)
+    
+    return Response(
+        content=buffer.getvalue(),
+        media_type="application/pdf",
+        headers={"Content-Disposition": f"attachment; filename={report.get('title', 'report').replace(' ', '_')}.pdf"}
+    )
+
+@reports_router.get("/{report_id}/download/csv")
+async def download_report_csv(report_id: str, current_user: dict = Depends(get_current_user)):
+    """Download report as CSV"""
+    import csv
+    from io import StringIO
+    
+    report = await db.reports.find_one({"id": report_id}, {"_id": 0})
+    if not report:
+        raise HTTPException(status_code=404, detail="Report not found")
+    
+    # Create CSV
+    output = StringIO()
+    writer = csv.writer(output)
+    
+    # Header row
+    writer.writerow(['ATECH NOC Commander Report'])
+    writer.writerow([])
+    writer.writerow(['Report Title', report.get('title', '')])
+    writer.writerow(['Report Type', report.get('type', '').replace('_', ' ').title()])
+    writer.writerow(['Period Start', report.get('period_start', '')])
+    writer.writerow(['Period End', report.get('period_end', '')])
+    writer.writerow(['Generated By', report.get('generated_by', '')])
+    writer.writerow(['Generated At', report.get('created_at', '')])
+    writer.writerow([])
+    writer.writerow(['Metric', 'Value'])
+    
+    # Content rows
+    content = report.get('content', {})
+    for key, value in content.items():
+        if isinstance(value, dict):
+            for k, v in value.items():
+                writer.writerow([f"{key} - {k}".replace('_', ' ').title(), str(v)])
+        else:
+            writer.writerow([key.replace('_', ' ').title(), str(value)])
+    
+    output.seek(0)
+    
+    return Response(
+        content=output.getvalue(),
+        media_type="text/csv",
+        headers={"Content-Disposition": f"attachment; filename={report.get('title', 'report').replace(' ', '_')}.csv"}
+    )
 
 # ===================== CONFIG ROUTES =====================
 @config_router.get("", response_model=List[Configuration])
@@ -1992,6 +2357,477 @@ async def delete_snmpv3_config(config_id: str, current_user: dict = Depends(get_
     if result.deleted_count == 0:
         raise HTTPException(status_code=404, detail="SNMP v3 configuration not found")
     return {"message": "SNMP v3 configuration deleted"}
+
+# ===================== OPENSTACK CONFIGURATION =====================
+@settings_router.get("/openstack")
+async def get_openstack_configs(current_user: dict = Depends(get_current_user)):
+    configs = await db.openstack_config.find({}, {"_id": 0}).to_list(100)
+    for config in configs:
+        if "password" in config:
+            config["password"] = "********"
+    return configs
+
+@settings_router.post("/openstack")
+async def create_openstack_config(config: OpenStackConfigCreate, current_user: dict = Depends(get_current_user)):
+    config_data = config.model_dump()
+    config_data["id"] = str(uuid.uuid4())
+    config_data["created_at"] = datetime.now(timezone.utc).isoformat()
+    config_data["is_active"] = True
+    insert_data = dict(config_data)
+    await db.openstack_config.insert_one(insert_data)
+    config_data["password"] = "********"
+    return {"message": "OpenStack configuration created", "config": config_data}
+
+@settings_router.put("/openstack/{config_id}")
+async def update_openstack_config(config_id: str, config: OpenStackConfigCreate, current_user: dict = Depends(get_current_user)):
+    existing = await db.openstack_config.find_one({"id": config_id})
+    if not existing:
+        raise HTTPException(status_code=404, detail="OpenStack configuration not found")
+    config_data = config.model_dump()
+    await db.openstack_config.update_one({"id": config_id}, {"$set": config_data})
+    config_data["id"] = config_id
+    config_data["password"] = "********"
+    return {"message": "OpenStack configuration updated", "config": config_data}
+
+@settings_router.delete("/openstack/{config_id}")
+async def delete_openstack_config(config_id: str, current_user: dict = Depends(get_current_user)):
+    result = await db.openstack_config.delete_one({"id": config_id})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="OpenStack configuration not found")
+    return {"message": "OpenStack configuration deleted"}
+
+# ===================== ORACLE DB CONFIGURATION =====================
+@settings_router.get("/oracle")
+async def get_oracle_configs(current_user: dict = Depends(get_current_user)):
+    configs = await db.oracle_config.find({}, {"_id": 0}).to_list(100)
+    for config in configs:
+        if "password" in config:
+            config["password"] = "********"
+    return configs
+
+@settings_router.post("/oracle")
+async def create_oracle_config(config: OracleDBConfigCreate, current_user: dict = Depends(get_current_user)):
+    config_data = config.model_dump()
+    config_data["id"] = str(uuid.uuid4())
+    config_data["created_at"] = datetime.now(timezone.utc).isoformat()
+    config_data["is_active"] = True
+    insert_data = dict(config_data)
+    await db.oracle_config.insert_one(insert_data)
+    config_data["password"] = "********"
+    return {"message": "Oracle DB configuration created", "config": config_data}
+
+@settings_router.put("/oracle/{config_id}")
+async def update_oracle_config(config_id: str, config: OracleDBConfigCreate, current_user: dict = Depends(get_current_user)):
+    existing = await db.oracle_config.find_one({"id": config_id})
+    if not existing:
+        raise HTTPException(status_code=404, detail="Oracle configuration not found")
+    config_data = config.model_dump()
+    await db.oracle_config.update_one({"id": config_id}, {"$set": config_data})
+    config_data["id"] = config_id
+    config_data["password"] = "********"
+    return {"message": "Oracle configuration updated", "config": config_data}
+
+@settings_router.delete("/oracle/{config_id}")
+async def delete_oracle_config(config_id: str, current_user: dict = Depends(get_current_user)):
+    result = await db.oracle_config.delete_one({"id": config_id})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Oracle configuration not found")
+    return {"message": "Oracle configuration deleted"}
+
+# ===================== VCENTER CONFIGURATION =====================
+@settings_router.get("/vcenter")
+async def get_vcenter_configs(current_user: dict = Depends(get_current_user)):
+    configs = await db.vcenter_config.find({}, {"_id": 0}).to_list(100)
+    for config in configs:
+        if "password" in config:
+            config["password"] = "********"
+    return configs
+
+@settings_router.post("/vcenter")
+async def create_vcenter_config(config: VCenterConfigCreate, current_user: dict = Depends(get_current_user)):
+    config_data = config.model_dump()
+    config_data["id"] = str(uuid.uuid4())
+    config_data["created_at"] = datetime.now(timezone.utc).isoformat()
+    config_data["is_active"] = True
+    insert_data = dict(config_data)
+    await db.vcenter_config.insert_one(insert_data)
+    config_data["password"] = "********"
+    return {"message": "vCenter configuration created", "config": config_data}
+
+@settings_router.put("/vcenter/{config_id}")
+async def update_vcenter_config(config_id: str, config: VCenterConfigCreate, current_user: dict = Depends(get_current_user)):
+    existing = await db.vcenter_config.find_one({"id": config_id})
+    if not existing:
+        raise HTTPException(status_code=404, detail="vCenter configuration not found")
+    config_data = config.model_dump()
+    await db.vcenter_config.update_one({"id": config_id}, {"$set": config_data})
+    config_data["id"] = config_id
+    config_data["password"] = "********"
+    return {"message": "vCenter configuration updated", "config": config_data}
+
+@settings_router.delete("/vcenter/{config_id}")
+async def delete_vcenter_config(config_id: str, current_user: dict = Depends(get_current_user)):
+    result = await db.vcenter_config.delete_one({"id": config_id})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="vCenter configuration not found")
+    return {"message": "vCenter configuration deleted"}
+
+# ===================== AAA SERVER CONFIGURATION =====================
+@settings_router.get("/aaa")
+async def get_aaa_configs(current_user: dict = Depends(get_current_user)):
+    configs = await db.aaa_config.find({}, {"_id": 0}).to_list(100)
+    for config in configs:
+        if "shared_secret" in config:
+            config["shared_secret"] = "********"
+    return configs
+
+@settings_router.post("/aaa")
+async def create_aaa_config(config: AAAServerConfigCreate, current_user: dict = Depends(get_current_user)):
+    config_data = config.model_dump()
+    config_data["id"] = str(uuid.uuid4())
+    config_data["created_at"] = datetime.now(timezone.utc).isoformat()
+    config_data["is_active"] = True
+    insert_data = dict(config_data)
+    await db.aaa_config.insert_one(insert_data)
+    config_data["shared_secret"] = "********"
+    return {"message": "AAA server configuration created", "config": config_data}
+
+@settings_router.put("/aaa/{config_id}")
+async def update_aaa_config(config_id: str, config: AAAServerConfigCreate, current_user: dict = Depends(get_current_user)):
+    existing = await db.aaa_config.find_one({"id": config_id})
+    if not existing:
+        raise HTTPException(status_code=404, detail="AAA configuration not found")
+    config_data = config.model_dump()
+    await db.aaa_config.update_one({"id": config_id}, {"$set": config_data})
+    config_data["id"] = config_id
+    config_data["shared_secret"] = "********"
+    return {"message": "AAA configuration updated", "config": config_data}
+
+@settings_router.delete("/aaa/{config_id}")
+async def delete_aaa_config(config_id: str, current_user: dict = Depends(get_current_user)):
+    result = await db.aaa_config.delete_one({"id": config_id})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="AAA configuration not found")
+    return {"message": "AAA configuration deleted"}
+
+# ===================== BACKUP CONFIGURATION =====================
+@settings_router.get("/backup")
+async def get_backup_configs(current_user: dict = Depends(get_current_user)):
+    configs = await db.backup_config.find({}, {"_id": 0}).to_list(100)
+    for config in configs:
+        if "server_password" in config:
+            config["server_password"] = "********"
+        if "api_key" in config:
+            config["api_key"] = "********"
+    return configs
+
+@settings_router.post("/backup")
+async def create_backup_config(config: BackupConfigCreate, current_user: dict = Depends(get_current_user)):
+    config_data = config.model_dump()
+    config_data["id"] = str(uuid.uuid4())
+    config_data["created_at"] = datetime.now(timezone.utc).isoformat()
+    config_data["is_active"] = True
+    insert_data = dict(config_data)
+    await db.backup_config.insert_one(insert_data)
+    if "server_password" in config_data and config_data["server_password"]:
+        config_data["server_password"] = "********"
+    if "api_key" in config_data and config_data["api_key"]:
+        config_data["api_key"] = "********"
+    return {"message": "Backup configuration created", "config": config_data}
+
+@settings_router.put("/backup/{config_id}")
+async def update_backup_config(config_id: str, config: BackupConfigCreate, current_user: dict = Depends(get_current_user)):
+    existing = await db.backup_config.find_one({"id": config_id})
+    if not existing:
+        raise HTTPException(status_code=404, detail="Backup configuration not found")
+    config_data = config.model_dump()
+    await db.backup_config.update_one({"id": config_id}, {"$set": config_data})
+    config_data["id"] = config_id
+    if config_data.get("server_password"):
+        config_data["server_password"] = "********"
+    if config_data.get("api_key"):
+        config_data["api_key"] = "********"
+    return {"message": "Backup configuration updated", "config": config_data}
+
+@settings_router.delete("/backup/{config_id}")
+async def delete_backup_config(config_id: str, current_user: dict = Depends(get_current_user)):
+    result = await db.backup_config.delete_one({"id": config_id})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Backup configuration not found")
+    return {"message": "Backup configuration deleted"}
+
+@settings_router.post("/backup/{config_id}/trigger")
+async def trigger_backup(config_id: str, current_user: dict = Depends(get_current_user)):
+    """Manually trigger a backup job"""
+    config = await db.backup_config.find_one({"id": config_id}, {"_id": 0})
+    if not config:
+        raise HTTPException(status_code=404, detail="Backup configuration not found")
+    
+    # Record backup attempt
+    backup_record = {
+        "id": str(uuid.uuid4()),
+        "config_id": config_id,
+        "config_name": config.get("name"),
+        "triggered_by": current_user["name"],
+        "status": "running",
+        "started_at": datetime.now(timezone.utc).isoformat()
+    }
+    await db.backup_jobs.insert_one(dict(backup_record))
+    
+    # Update config last_run
+    await db.backup_config.update_one(
+        {"id": config_id}, 
+        {"$set": {"last_run": datetime.now(timezone.utc).isoformat(), "last_status": "running"}}
+    )
+    
+    # In a real implementation, this would trigger the actual backup
+    # For now, we simulate success
+    await db.backup_jobs.update_one(
+        {"id": backup_record["id"]},
+        {"$set": {"status": "completed", "completed_at": datetime.now(timezone.utc).isoformat()}}
+    )
+    await db.backup_config.update_one(
+        {"id": config_id}, 
+        {"$set": {"last_status": "completed"}}
+    )
+    
+    return {"message": "Backup triggered successfully", "job_id": backup_record["id"]}
+
+# ===================== CUSTOM DASHBOARDS =====================
+@settings_router.get("/dashboards")
+async def get_custom_dashboards(current_user: dict = Depends(get_current_user)):
+    dashboards = await db.custom_dashboards.find({}, {"_id": 0}).to_list(100)
+    return dashboards
+
+@settings_router.post("/dashboards")
+async def create_custom_dashboard(dashboard: CustomDashboardCreate, current_user: dict = Depends(get_current_user)):
+    dashboard_data = dashboard.model_dump()
+    dashboard_data["id"] = str(uuid.uuid4())
+    dashboard_data["created_by"] = current_user["name"]
+    dashboard_data["created_at"] = datetime.now(timezone.utc).isoformat()
+    dashboard_data["updated_at"] = datetime.now(timezone.utc).isoformat()
+    insert_data = dict(dashboard_data)
+    await db.custom_dashboards.insert_one(insert_data)
+    return {"message": "Custom dashboard created", "dashboard": dashboard_data}
+
+@settings_router.put("/dashboards/{dashboard_id}")
+async def update_custom_dashboard(dashboard_id: str, dashboard: CustomDashboardCreate, current_user: dict = Depends(get_current_user)):
+    existing = await db.custom_dashboards.find_one({"id": dashboard_id})
+    if not existing:
+        raise HTTPException(status_code=404, detail="Dashboard not found")
+    dashboard_data = dashboard.model_dump()
+    dashboard_data["updated_at"] = datetime.now(timezone.utc).isoformat()
+    await db.custom_dashboards.update_one({"id": dashboard_id}, {"$set": dashboard_data})
+    dashboard_data["id"] = dashboard_id
+    return {"message": "Dashboard updated", "dashboard": dashboard_data}
+
+@settings_router.delete("/dashboards/{dashboard_id}")
+async def delete_custom_dashboard(dashboard_id: str, current_user: dict = Depends(get_current_user)):
+    result = await db.custom_dashboards.delete_one({"id": dashboard_id})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Dashboard not found")
+    return {"message": "Dashboard deleted"}
+
+@settings_router.get("/dashboards/templates")
+async def get_dashboard_templates(current_user: dict = Depends(get_current_user)):
+    """Get predefined dashboard templates"""
+    templates = [
+        {
+            "id": "openstack-monitoring",
+            "name": "OpenStack Monitoring",
+            "application_type": "openstack",
+            "template_type": "monitoring",
+            "widgets": [
+                {"type": "stat", "title": "Compute Instances", "metric": "nova.instances"},
+                {"type": "stat", "title": "Networks", "metric": "neutron.networks"},
+                {"type": "chart", "title": "CPU Usage", "metric": "nova.cpu_usage"},
+                {"type": "chart", "title": "Memory Usage", "metric": "nova.memory_usage"},
+                {"type": "table", "title": "Instance Status", "metric": "nova.instance_list"}
+            ]
+        },
+        {
+            "id": "oracle-performance",
+            "name": "Oracle Performance",
+            "application_type": "oracle",
+            "template_type": "performance",
+            "widgets": [
+                {"type": "stat", "title": "Active Sessions", "metric": "oracle.sessions"},
+                {"type": "stat", "title": "Tablespace Used", "metric": "oracle.tablespace_pct"},
+                {"type": "chart", "title": "Query Performance", "metric": "oracle.query_time"},
+                {"type": "chart", "title": "I/O Stats", "metric": "oracle.io_stats"},
+                {"type": "table", "title": "Top SQL", "metric": "oracle.top_sql"}
+            ]
+        },
+        {
+            "id": "vcenter-overview",
+            "name": "vCenter Overview",
+            "application_type": "vcenter",
+            "template_type": "monitoring",
+            "widgets": [
+                {"type": "stat", "title": "Total VMs", "metric": "vcenter.vm_count"},
+                {"type": "stat", "title": "ESXi Hosts", "metric": "vcenter.host_count"},
+                {"type": "stat", "title": "Datastore Usage", "metric": "vcenter.datastore_pct"},
+                {"type": "chart", "title": "Cluster CPU", "metric": "vcenter.cluster_cpu"},
+                {"type": "chart", "title": "Cluster Memory", "metric": "vcenter.cluster_memory"}
+            ]
+        }
+    ]
+    return templates
+
+# ===================== AI INCIDENT RESOLUTION =====================
+@ai_router.post("/incidents/{incident_id}/analyze")
+async def ai_analyze_incident(incident_id: str, current_user: dict = Depends(get_current_user)):
+    """AI analyzes incident and suggests resolution"""
+    incident = await db.incidents.find_one({"id": incident_id}, {"_id": 0})
+    if not incident:
+        raise HTTPException(status_code=404, detail="Incident not found")
+    
+    # Get related device and alerts
+    device = None
+    if incident.get("device_id"):
+        device = await db.devices.find_one({"id": incident["device_id"]}, {"_id": 0})
+    
+    alerts = await db.alerts.find({"incident_id": incident_id}, {"_id": 0}).to_list(100)
+    
+    # Build context for AI analysis
+    context = f"""
+    Incident: {incident.get('title', 'Unknown')}
+    Description: {incident.get('description', 'No description')}
+    Priority: {incident.get('priority', 'Unknown')}
+    Status: {incident.get('status', 'Unknown')}
+    Device: {device.get('name', 'Unknown') if device else 'No device'}
+    Device Type: {device.get('type', 'Unknown') if device else 'N/A'}
+    Device Status: {device.get('status', 'Unknown') if device else 'N/A'}
+    Related Alerts: {len(alerts)}
+    """
+    
+    # Get AI analysis
+    analysis = await get_ai_analysis(context, "Analyze this incident and provide: 1) Root cause analysis, 2) Recommended actions, 3) Whether this can be auto-resolved or requires user confirmation")
+    
+    # Determine action type based on analysis
+    action_type = "auto_resolve"
+    requires_confirmation = False
+    
+    analysis_lower = analysis.lower()
+    if "reboot" in analysis_lower or "restart" in analysis_lower:
+        action_type = "reboot_required"
+        requires_confirmation = True
+    elif "disconnect" in analysis_lower or "link" in analysis_lower:
+        action_type = "link_reset"
+        requires_confirmation = True
+    elif "hardware" in analysis_lower and ("failure" in analysis_lower or "fault" in analysis_lower):
+        action_type = "hardware_failure"
+        requires_confirmation = False  # SOS sent automatically
+    
+    # Create incident action record
+    action = IncidentAction(
+        incident_id=incident_id,
+        action_type=action_type,
+        description=analysis,
+        requires_confirmation=requires_confirmation,
+        confirmation_status="pending" if requires_confirmation else None
+    )
+    
+    action_dict = action.model_dump()
+    action_dict["created_at"] = action_dict["created_at"].isoformat()
+    await db.incident_actions.insert_one(dict(action_dict))
+    
+    # If hardware failure, send SOS to all escalation contacts
+    sos_sent = False
+    if action_type == "hardware_failure":
+        escalation_contacts = await db.escalation_contacts.find({}, {"_id": 0}).to_list(100)
+        if escalation_contacts:
+            # Get email config
+            email_config = await db.email_config.find_one({}, {"_id": 0})
+            if email_config:
+                try:
+                    msg = MIMEMultipart()
+                    msg['From'] = f"{email_config.get('sender_name', 'NOC')} <{email_config['sender_email']}>"
+                    msg['To'] = ', '.join([c["email"] for c in escalation_contacts])
+                    msg['Subject'] = f"🚨 SOS: HARDWARE FAILURE - {incident.get('title', 'Critical Alert')}"
+                    
+                    body = f"""
+                    <html>
+                    <body style="font-family: Arial, sans-serif;">
+                        <h2 style="color: #dc2626;">🚨 HARDWARE FAILURE DETECTED</h2>
+                        <h3>{incident.get('title', 'Critical Incident')}</h3>
+                        <p><strong>Device:</strong> {device.get('name', 'Unknown') if device else 'Unknown'}</p>
+                        <p><strong>Description:</strong> {incident.get('description', 'No description')}</p>
+                        <hr>
+                        <h4>AI Analysis:</h4>
+                        <p>{analysis}</p>
+                        <hr>
+                        <p style="color: #dc2626;"><strong>IMMEDIATE ATTENTION REQUIRED</strong></p>
+                        <p>This is an automated SOS alert from ATECH NOC Commander.</p>
+                    </body>
+                    </html>
+                    """
+                    msg.attach(MIMEText(body, 'html'))
+                    
+                    with smtplib.SMTP(email_config['smtp_server'], email_config['smtp_port']) as server:
+                        if email_config.get('use_tls', True):
+                            server.starttls()
+                        server.login(email_config['username'], email_config['password'])
+                        server.send_message(msg)
+                    sos_sent = True
+                except Exception as e:
+                    logger.error(f"Failed to send SOS email: {e}")
+    
+    return {
+        "analysis": analysis,
+        "action_type": action_type,
+        "requires_confirmation": requires_confirmation,
+        "action_id": action.id,
+        "sos_sent": sos_sent
+    }
+
+@ai_router.post("/incidents/actions/{action_id}/confirm")
+async def confirm_incident_action(action_id: str, approved: bool, current_user: dict = Depends(get_current_user)):
+    """Confirm or reject an AI-suggested incident action"""
+    action = await db.incident_actions.find_one({"id": action_id}, {"_id": 0})
+    if not action:
+        raise HTTPException(status_code=404, detail="Action not found")
+    
+    status = "approved" if approved else "rejected"
+    await db.incident_actions.update_one(
+        {"id": action_id},
+        {"$set": {
+            "confirmation_status": status,
+            "confirmed_by": current_user["name"]
+        }}
+    )
+    
+    result = {"message": f"Action {status}", "executed": False}
+    
+    # If approved, execute the action (simulated)
+    if approved:
+        await db.incident_actions.update_one(
+            {"id": action_id},
+            {"$set": {
+                "executed": True,
+                "executed_at": datetime.now(timezone.utc).isoformat(),
+                "result": "Action executed successfully"
+            }}
+        )
+        
+        # Update incident status
+        await db.incidents.update_one(
+            {"id": action.get("incident_id")},
+            {"$set": {"status": "in_progress", "ai_action_taken": True}}
+        )
+        result["executed"] = True
+        result["message"] = "Action approved and executed"
+    
+    return result
+
+@ai_router.get("/incidents/actions/pending")
+async def get_pending_actions(current_user: dict = Depends(get_current_user)):
+    """Get all pending actions requiring user confirmation"""
+    actions = await db.incident_actions.find(
+        {"requires_confirmation": True, "confirmation_status": "pending"},
+        {"_id": 0}
+    ).to_list(100)
+    return actions
 
 # Include all routers
 api_router.include_router(auth_router)
