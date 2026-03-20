@@ -111,6 +111,42 @@ A comprehensive NOC (Network Operation Center) tool where AI agents act as NOC e
 - ✅ **AAA Badge**: Purple "AAA" badge for devices with AAA enabled
 - ✅ **Attention Required Section**: Lists warnings for outdated OS and warranty issues
 
+#### 3. Autonomous AI Agent (Auto-Fix) - NEW
+- ✅ **Context Menu**: "Run AI Agent (Auto-Fix)" as primary option on incidents
+- ✅ **AI Analysis**: Uses GPT-5.2 to analyze incident and determine required actions
+- ✅ **Auto-Resolve Actions** (no confirmation needed):
+  - Configuration corrections
+  - Clear logs
+  - Route table fixes
+  - Traceroute analysis
+  - STP loop detection
+  - Asymmetric routing detection
+  - Dead memory cleanup
+  - Switching/Routing loop fixes
+  - Service restarts
+  - Interface bounce
+- ✅ **Actions Requiring Confirmation**:
+  - Device reboot
+  - Link/Interface reset
+  - Firmware update
+  - Factory reset
+  - Power cycle
+  - Hardware replacement
+- ✅ **Notification Bell**: Shows pending action count in header
+- ✅ **Pending Actions Panel**: Lists actions needing approval with details
+- ✅ **Confirmation Dialog**: Shows command, risk level, estimated downtime, warning
+- ✅ **Agent Execution Panel**: Shows real-time execution log with timestamps
+- ✅ **SSH Simulation Mode**: Runs in simulation when credentials not configured
+- ✅ **Auto-Trigger Option**: Can be enabled in settings to trigger on incident creation
+- API Endpoints:
+  - `POST /api/agent-exec/run/{incident_id}` - Run agent on incident
+  - `GET /api/agent-exec/executions` - Get all executions
+  - `GET /api/agent-exec/pending-actions` - Get pending confirmations
+  - `GET /api/agent-exec/pending-actions/count` - Get pending count
+  - `POST /api/agent-exec/actions/{id}/approve` - Approve and execute action
+  - `POST /api/agent-exec/actions/{id}/reject` - Reject action
+  - `GET/PUT /api/agent-exec/settings` - Agent settings
+
 ## New Settings Tabs (Phase 6)
 | Tab | Purpose |
 |-----|---------|
@@ -151,6 +187,9 @@ A comprehensive NOC (Network Operation Center) tool where AI agents act as NOC e
 - `custom_dashboards` - User dashboards
 - `incident_actions` - AI action tracking
 - `troubleshoot_reports` - AI troubleshooting reports (Phase 7)
+- `agent_executions` - Autonomous agent execution records (Phase 7)
+- `pending_actions` - Actions awaiting user confirmation (Phase 7)
+- `agent_settings` - Global agent configuration (Phase 7)
 
 ## Device Model (Enhanced - Phase 7)
 ```python
