@@ -147,6 +147,27 @@ A comprehensive NOC (Network Operation Center) tool where AI agents act as NOC e
   - `POST /api/agent-exec/actions/{id}/reject` - Reject action
   - `GET/PUT /api/agent-exec/settings` - Agent settings
 
+#### 4. Network Diagnostics Popup - NEW
+- ✅ **Context Menu**: "Network Diagnostics" option on both Incidents and Alerts pages
+- ✅ **Ping Status Tab**:
+  - Summary cards: Packets Received, Packet Loss %, Avg Latency, Min-Max Range
+  - Individual ping results with success/timeout indicators
+  - Status badge: REACHABLE / UNREACHABLE
+  - Auto-Refresh option (5 second intervals)
+- ✅ **Traceroute Map Tab**:
+  - Visual route path with numbered hop circles
+  - Each hop shows: hostname, IP, type icon, latency (3 measurements)
+  - Path Quality indicator: GOOD / DEGRADED / POOR
+  - Total Hops count and Total Latency
+  - DESTINATION badge on final hop
+  - Issues Detected alert section for high latency jumps or timeouts
+- ✅ **Run All Button**: Triggers both ping and traceroute simultaneously
+- ✅ **Diagnostics History**: Stores all diagnostic runs
+- API Endpoints:
+  - `POST /api/agent-exec/diagnostics/ping` - Run ping with packet count
+  - `POST /api/agent-exec/diagnostics/traceroute` - Run traceroute with max hops
+  - `GET /api/agent-exec/diagnostics/history` - Get diagnostic history
+
 ## New Settings Tabs (Phase 6)
 | Tab | Purpose |
 |-----|---------|
@@ -190,6 +211,7 @@ A comprehensive NOC (Network Operation Center) tool where AI agents act as NOC e
 - `agent_executions` - Autonomous agent execution records (Phase 7)
 - `pending_actions` - Actions awaiting user confirmation (Phase 7)
 - `agent_settings` - Global agent configuration (Phase 7)
+- `network_diagnostics` - Ping and traceroute history (Phase 7)
 
 ## Device Model (Enhanced - Phase 7)
 ```python
