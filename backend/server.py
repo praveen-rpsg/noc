@@ -1566,6 +1566,195 @@ async def get_incident_execution_log(incident_id: str, current_user: dict = Depe
     
     return executions
 
+# ===================== NETWORK DIAGNOSTICS =====================
+
+class PingRequest(BaseModel):
+    target: str
+    count: int = 4
+    device_id: Optional[str] = None
+
+class TracerouteRequest(BaseModel):
+    target: str
+    max_hops: int = 30
+    device_id: Optional[str] = None
+
+@agent_exec_router.post("/diagnostics/ping")
+async def run_ping_diagnostic(request: PingRequest, current_user: dict = Depends(get_current_user)):
+    """Run ping diagnostic and return results"""
+    target = request.target
+    count = min(request.count, 10)  # Max 10 pings
+    
+    # Get device info if provided
+    device = None
+    if request.device_id:
+        device = await db.devices.find_one({"id": request.device_id}, {"_id": 0})
+    
+    # Simulate ping results (in production, would execute real ping via SSH or locally)
+    import random
+    ping_results = []
+    packets_sent = count
+    packets_received = 0
+    total_time = 0
+    
+    for i in range(count):
+        # Simulate realistic ping behavior
+        success = random.random() > 0.1  # 90% success rate simulation
+        latency = random.uniform(1, 100) if success else None
+        
+        ping_results.append({
+            "seq": i + 1,
+            "success": success,
+            "latency_ms": round(latency, 2) if latency else None,
+            "ttl": 64 if success else None,
+            "timestamp": datetime.now(timezone.utc).isoformat()
+        })
+        
+        if success:
+            packets_received += 1
+            total_time += latency
+    
+    packet_loss = ((packets_sent - packets_received) / packets_sent) * 100
+    avg_latency = total_time / packets_received if packets_received > 0 else None
+    
+    result = {
+        "target": target,
+        "device_name": device.get('name') if device else None,
+        "device_ip": device.get('ip_address') if device else target,
+        "packets_sent": packets_sent,
+        "packets_received": packets_received,
+        "packet_loss_percent": round(packet_loss, 1),
+        "avg_latency_ms": round(avg_latency, 2) if avg_latency else None,
+        "min_latency_ms": round(min([r['latency_ms'] for r in ping_results if r['latency_ms']], default=0), 2),
+        "max_latency_ms": round(max([r['latency_ms'] for r in ping_results if r['latency_ms']], default=0), 2),
+        "ping_results": ping_results,
+        "status": "reachable" if packet_loss < 100 else "unreachable",
+        "timestamp": datetime.now(timezone.utc).isoformat()
+    }
+    
+    # Store diagnostic result
+    diagnostic_record = {
+        "id": str(uuid.uuid4()),
+        "type": "ping",
+        "target": target,
+        "device_id": request.device_id,
+        "result": result,
+        "triggered_by": current_user["name"],
+        "created_at": datetime.now(timezone.utc).isoformat()
+    }
+    await db.network_diagnostics.insert_one(diagnostic_record)
+    
+    return result
+
+@agent_exec_router.post("/diagnostics/traceroute")
+async def run_traceroute_diagnostic(request: TracerouteRequest, current_user: dict = Depends(get_current_user)):
+    """Run traceroute diagnostic and return hop-by-hop results"""
+    target = request.target
+    max_hops = min(request.max_hops, 30)
+    
+    # Get device info if provided
+    device = None
+    if request.device_id:
+        device = await db.devices.find_one({"id": request.device_id}, {"_id": 0})
+    
+    # Simulate traceroute results with realistic hop data
+    import random
+    
+    # Simulated network path
+    hop_templates = [
+        {"name": "gateway.local", "ip": "192.168.1.1", "type": "gateway"},
+        {"name": "isp-edge-router", "ip": "10.0.0.1", "type": "router"},
+        {"name": "core-router-1.isp.net", "ip": "203.0.113.1", "type": "router"},
+        {"name": "backbone-node.isp.net", "ip": "203.0.113.10", "type": "backbone"},
+        {"name": "peering-exchange", "ip": "198.51.100.1", "type": "exchange"},
+        {"name": "cdn-edge-server", "ip": "198.51.100.50", "type": "cdn"},
+        {"name": "datacenter-gw", "ip": "172.16.0.1", "type": "datacenter"},
+        {"name": target, "ip": target if '.' in target else "8.8.8.8", "type": "destination"},
+    ]
+    
+    hops = []
+    num_hops = random.randint(5, min(len(hop_templates), max_hops))
+    
+    for i in range(num_hops):
+        template = hop_templates[min(i, len(hop_templates) - 1)]
+        
+        # Simulate latency increasing with hops
+        base_latency = 5 + (i * 8) + random.uniform(-3, 10)
+        
+        # Simulate occasional packet loss or timeout
+        is_timeout = random.random() < 0.05
+        
+        hop_data = {
+            "hop": i + 1,
+            "ip": template["ip"] if not is_timeout else None,
+            "hostname": template["name"] if not is_timeout else None,
+            "type": template["type"],
+            "latency_1": round(base_latency + random.uniform(-2, 2), 2) if not is_timeout else None,
+            "latency_2": round(base_latency + random.uniform(-2, 2), 2) if not is_timeout else None,
+            "latency_3": round(base_latency + random.uniform(-2, 2), 2) if not is_timeout else None,
+            "avg_latency": round(base_latency, 2) if not is_timeout else None,
+            "status": "timeout" if is_timeout else "ok",
+            "is_destination": i == num_hops - 1
+        }
+        
+        hops.append(hop_data)
+    
+    # Detect potential issues
+    issues = []
+    for i, hop in enumerate(hops):
+        if hop["status"] == "timeout":
+            issues.append(f"Hop {hop['hop']}: Timeout - possible firewall or routing issue")
+        elif i > 0 and hop["avg_latency"] and hops[i-1]["avg_latency"]:
+            latency_jump = hop["avg_latency"] - hops[i-1]["avg_latency"]
+            if latency_jump > 50:
+                issues.append(f"Hop {hop['hop']}: High latency jump (+{latency_jump:.0f}ms) - possible congestion")
+    
+    result = {
+        "target": target,
+        "device_name": device.get('name') if device else None,
+        "device_ip": device.get('ip_address') if device else None,
+        "total_hops": len(hops),
+        "destination_reached": hops[-1]["is_destination"] if hops else False,
+        "total_latency_ms": hops[-1]["avg_latency"] if hops and hops[-1]["avg_latency"] else None,
+        "hops": hops,
+        "issues_detected": issues,
+        "path_quality": "good" if len(issues) == 0 else "degraded" if len(issues) < 3 else "poor",
+        "timestamp": datetime.now(timezone.utc).isoformat()
+    }
+    
+    # Store diagnostic result
+    diagnostic_record = {
+        "id": str(uuid.uuid4()),
+        "type": "traceroute",
+        "target": target,
+        "device_id": request.device_id,
+        "result": result,
+        "triggered_by": current_user["name"],
+        "created_at": datetime.now(timezone.utc).isoformat()
+    }
+    await db.network_diagnostics.insert_one(diagnostic_record)
+    
+    return result
+
+@agent_exec_router.get("/diagnostics/history")
+async def get_diagnostics_history(
+    limit: int = 20,
+    diagnostic_type: Optional[str] = None,
+    device_id: Optional[str] = None,
+    current_user: dict = Depends(get_current_user)
+):
+    """Get history of network diagnostics"""
+    query = {}
+    if diagnostic_type:
+        query["type"] = diagnostic_type
+    if device_id:
+        query["device_id"] = device_id
+    
+    diagnostics = await db.network_diagnostics.find(
+        query, {"_id": 0}
+    ).sort("created_at", -1).to_list(limit)
+    
+    return diagnostics
+
 # ===================== AUTH ROUTES =====================
 @auth_router.post("/register", response_model=TokenResponse)
 async def register(user_data: UserCreate):

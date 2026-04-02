@@ -12,6 +12,7 @@ import { ScrollArea } from '../components/ui/scroll-area';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
 import { incidentsApi, devicesApi, agentExecApi } from '../services/api';
 import { toast } from 'sonner';
+import NetworkDiagnosticsModal from '../components/NetworkDiagnosticsModal';
 import {
   FileWarning,
   Plus,
@@ -27,7 +28,8 @@ import {
   X,
   Zap,
   Play,
-  Terminal
+  Terminal,
+  Activity
 } from 'lucide-react';
 import { format } from 'date-fns';
 
@@ -93,6 +95,12 @@ export default function IncidentsPage() {
   const [isAgentRunning, setIsAgentRunning] = useState(false);
   const [agentExecution, setAgentExecution] = useState(null);
   const [isAgentPanelOpen, setIsAgentPanelOpen] = useState(false);
+  
+  // Network diagnostics state
+  const [isDiagnosticsOpen, setIsDiagnosticsOpen] = useState(false);
+  const [diagnosticsTarget, setDiagnosticsTarget] = useState('');
+  const [diagnosticsDeviceId, setDiagnosticsDeviceId] = useState(null);
+  const [diagnosticsDeviceName, setDiagnosticsDeviceName] = useState(null);
 
   const fetchData = useCallback(async () => {
     try {
@@ -167,6 +175,30 @@ export default function IncidentsPage() {
     } finally {
       setIsAgentRunning(false);
     }
+  };
+
+  // Open network diagnostics for an incident
+  const openDiagnostics = async (incident) => {
+    setContextMenu({ visible: false, x: 0, y: 0, incident: null });
+    
+    // Get the first affected device's IP if available
+    let targetIp = '';
+    let deviceId = null;
+    let deviceName = null;
+    
+    if (incident.affected_devices?.length > 0) {
+      const device = devices.find(d => d.id === incident.affected_devices[0]);
+      if (device) {
+        targetIp = device.ip_address;
+        deviceId = device.id;
+        deviceName = device.name;
+      }
+    }
+    
+    setDiagnosticsTarget(targetIp);
+    setDiagnosticsDeviceId(deviceId);
+    setDiagnosticsDeviceName(deviceName);
+    setIsDiagnosticsOpen(true);
   };
 
   const handleAiTroubleshoot = async (incident) => {
@@ -685,6 +717,14 @@ export default function IncidentsPage() {
             <ArrowUpRight className="h-4 w-4 text-slate-600" />
             <span>View Details</span>
           </button>
+          <button
+            className="w-full px-4 py-2 text-left hover:bg-cyan-50 flex items-center gap-2 text-sm border-t border-border/30 mt-1 pt-2"
+            onClick={() => openDiagnostics(contextMenu.incident)}
+            data-testid="context-menu-diagnostics"
+          >
+            <Activity className="h-4 w-4 text-cyan-600" />
+            <span>Network Diagnostics</span>
+          </button>
           {contextMenu.incident?.status === 'open' && (
             <button
               className="w-full px-4 py-2 text-left hover:bg-blue-50 flex items-center gap-2 text-sm"
@@ -895,6 +935,18 @@ export default function IncidentsPage() {
                 )}
 
                 <DialogFooter>
+                  <Button 
+                    variant="outline" 
+                    onClick={() => {
+                      if (agentExecution?.incident) {
+                        openDiagnostics(agentExecution.incident);
+                      }
+                    }}
+                    disabled={!agentExecution?.device_ip}
+                  >
+                    <Activity className="h-4 w-4 mr-2" />
+                    Network Diagnostics
+                  </Button>
                   <Button variant="outline" onClick={() => setIsAgentPanelOpen(false)}>
                     Close
                   </Button>
@@ -910,6 +962,15 @@ export default function IncidentsPage() {
           </div>
         </DialogContent>
       </Dialog>
+
+      {/* Network Diagnostics Modal */}
+      <NetworkDiagnosticsModal
+        isOpen={isDiagnosticsOpen}
+        onClose={() => setIsDiagnosticsOpen(false)}
+        defaultTarget={diagnosticsTarget}
+        deviceId={diagnosticsDeviceId}
+        deviceName={diagnosticsDeviceName}
+      />
     </div>
   );
 }

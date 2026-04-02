@@ -118,4 +118,13 @@ export const agentExecApi = {
   
   // Get execution log for incident
   getExecutionLog: (incidentId) => axios.get(`${API}/agent-exec/execution-log/${incidentId}`),
+  
+  // Network Diagnostics
+  runPing: (target, count = 4, deviceId = null) => 
+    axios.post(`${API}/agent-exec/diagnostics/ping`, { target, count, device_id: deviceId }),
+  
+  runTraceroute: (target, maxHops = 30, deviceId = null) => 
+    axios.post(`${API}/agent-exec/diagnostics/traceroute`, { target, max_hops: maxHops, device_id: deviceId }),
+  
+  getDiagnosticsHistory: (params) => axios.get(`${API}/agent-exec/diagnostics/history`, { params }),
 };

@@ -7,8 +7,9 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '.
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '../components/ui/dialog';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table';
 import { ScrollArea } from '../components/ui/scroll-area';
-import { alertsApi } from '../services/api';
+import { alertsApi, devicesApi } from '../services/api';
 import { toast } from 'sonner';
+import NetworkDiagnosticsModal from '../components/NetworkDiagnosticsModal';
 import {
   AlertTriangle,
   Bell,
@@ -20,7 +21,8 @@ import {
   Eye,
   Brain,
   Loader2,
-  ArrowUpRight
+  ArrowUpRight,
+  Activity
 } from 'lucide-react';
 import { format } from 'date-fns';
 
@@ -57,6 +59,7 @@ const StatusBadge = ({ status }) => {
 
 export default function AlertsPage() {
   const [alerts, setAlerts] = useState([]);
+  const [devices, setDevices] = useState([]);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
   const [filterSeverity, setFilterSeverity] = useState('all');
@@ -67,14 +70,24 @@ export default function AlertsPage() {
   const [isTroubleshootOpen, setIsTroubleshootOpen] = useState(false);
   const [troubleshootResult, setTroubleshootResult] = useState(null);
   const [troubleshootLoading, setTroubleshootLoading] = useState(false);
+  
+  // Network diagnostics state
+  const [isDiagnosticsOpen, setIsDiagnosticsOpen] = useState(false);
+  const [diagnosticsTarget, setDiagnosticsTarget] = useState('');
+  const [diagnosticsDeviceId, setDiagnosticsDeviceId] = useState(null);
+  const [diagnosticsDeviceName, setDiagnosticsDeviceName] = useState(null);
 
   const fetchAlerts = useCallback(async () => {
     try {
       const params = {};
       if (filterStatus !== 'all') params.status = filterStatus;
       if (filterSeverity !== 'all') params.severity = filterSeverity;
-      const response = await alertsApi.getAll(params);
-      setAlerts(response.data);
+      const [alertsRes, devicesRes] = await Promise.all([
+        alertsApi.getAll(params),
+        devicesApi.getAll()
+      ]);
+      setAlerts(alertsRes.data);
+      setDevices(devicesRes.data);
     } catch (error) {
       toast.error('Failed to fetch alerts');
     } finally {
@@ -126,6 +139,19 @@ export default function AlertsPage() {
     } finally {
       setTroubleshootLoading(false);
     }
+  };
+
+  // Open network diagnostics for an alert
+  const openDiagnostics = (alert) => {
+    setContextMenu({ visible: false, x: 0, y: 0, alert: null });
+    
+    // Get device IP from alert
+    const device = devices.find(d => d.id === alert.device_id);
+    
+    setDiagnosticsTarget(device?.ip_address || '');
+    setDiagnosticsDeviceId(alert.device_id);
+    setDiagnosticsDeviceName(alert.device_name || device?.name);
+    setIsDiagnosticsOpen(true);
   };
 
   const handleAcknowledge = async (alertId) => {
@@ -366,7 +392,7 @@ export default function AlertsPage() {
           className="fixed z-50 bg-white rounded-lg shadow-lg border border-border/50 py-2 min-w-[200px]"
           style={{ 
             left: Math.min(contextMenu.x, window.innerWidth - 220),
-            top: Math.min(contextMenu.y, window.innerHeight - 150)
+            top: Math.min(contextMenu.y, window.innerHeight - 200)
           }}
           data-testid="alert-context-menu"
         >
@@ -378,9 +404,17 @@ export default function AlertsPage() {
             <Brain className="h-4 w-4 text-purple-600" />
             <span className="font-medium">AI Troubleshoot</span>
           </button>
+          <button
+            className="w-full px-4 py-2 text-left hover:bg-cyan-50 flex items-center gap-2 text-sm"
+            onClick={() => openDiagnostics(contextMenu.alert)}
+            data-testid="context-menu-diagnostics"
+          >
+            <Activity className="h-4 w-4 text-cyan-600" />
+            <span>Network Diagnostics</span>
+          </button>
           {contextMenu.alert?.status === 'active' && (
             <button
-              className="w-full px-4 py-2 text-left hover:bg-amber-50 flex items-center gap-2 text-sm"
+              className="w-full px-4 py-2 text-left hover:bg-amber-50 flex items-center gap-2 text-sm border-t border-border/30 mt-1 pt-2"
               onClick={() => {
                 handleAcknowledge(contextMenu.alert.id);
                 setContextMenu({ visible: false, x: 0, y: 0, alert: null });
@@ -465,6 +499,15 @@ export default function AlertsPage() {
           </div>
         </DialogContent>
       </Dialog>
+
+      {/* Network Diagnostics Modal */}
+      <NetworkDiagnosticsModal
+        isOpen={isDiagnosticsOpen}
+        onClose={() => setIsDiagnosticsOpen(false)}
+        defaultTarget={diagnosticsTarget}
+        deviceId={diagnosticsDeviceId}
+        deviceName={diagnosticsDeviceName}
+      />
     </div>
   );
 }
