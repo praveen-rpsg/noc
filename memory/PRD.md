@@ -154,6 +154,7 @@ A comprehensive NOC (Network Operation Center) tool where AI agents act as NOC e
   - Individual ping results with success/timeout indicators
   - Status badge: REACHABLE / UNREACHABLE
   - Auto-Refresh option (5 second intervals)
+  - Voice alert when unreachable or >50% packet loss
 - ✅ **Traceroute Map Tab**:
   - Visual route path with numbered hop circles
   - Each hop shows: hostname, IP, type icon, latency (3 measurements)
@@ -161,12 +162,45 @@ A comprehensive NOC (Network Operation Center) tool where AI agents act as NOC e
   - Total Hops count and Total Latency
   - DESTINATION badge on final hop
   - Issues Detected alert section for high latency jumps or timeouts
+  - Voice alert for detected issues
+  - **"Show Path on Network Topology" button** - navigates to topology with highlighted path
+- ✅ **Routing AI Tab** - NEW:
+  - AI-powered routing protocol optimization suggestions
+  - Analyzes network topology using GPT-5.2
+  - Shows: Network Summary, Recommended Protocol, Network Assessment
+  - Implementation Priority with impact levels
+  - Configuration suggestions for OSPF/EIGRP/BGP/IS-IS
 - ✅ **Run All Button**: Triggers both ping and traceroute simultaneously
 - ✅ **Diagnostics History**: Stores all diagnostic runs
 - API Endpoints:
   - `POST /api/agent-exec/diagnostics/ping` - Run ping with packet count
   - `POST /api/agent-exec/diagnostics/traceroute` - Run traceroute with max hops
   - `GET /api/agent-exec/diagnostics/history` - Get diagnostic history
+  - `POST /api/agent-exec/routing/optimize` - AI routing optimization
+  - `GET /api/agent-exec/routing/history` - Routing recommendation history
+
+#### 5. Voice Alert System - NEW
+- ✅ **Voice Alerts**: Text-to-speech alerts for network failures
+- ✅ **Voice Type Selection**: Female or Male voice options
+- ✅ **Specific Voice Selection**: Choose from browser's available voices
+- ✅ **Mute/Unmute Toggle**: Button in header to enable/disable voice alerts
+- ✅ **Volume Control**: Adjustable from 0-100%
+- ✅ **Speech Rate**: Adjustable from 0.5x to 2x speed
+- ✅ **Test Voice Alert**: Button to test voice configuration
+- ✅ **Settings Dialog**: Full settings panel accessible from header
+- ✅ **Auto Announcements**:
+  - Device unreachable alerts
+  - High packet loss alerts (>50%)
+  - Traceroute issues detected
+  - High latency warnings
+- ✅ **Preferences Persistence**: Settings saved to localStorage
+
+#### 6. Network Topology Integration - NEW
+- ✅ **Traceroute Path Highlighting**: Show traceroute path on topology map
+- ✅ **Path Banner**: Displays target and hop count when path is shown
+- ✅ **Clear Path Button**: Dismiss highlighted path
+- ✅ **Session Storage**: Path data persisted across navigation
+- ✅ **Navigation Link**: "Show Path on Network Topology" button in diagnostics
 
 ## New Settings Tabs (Phase 6)
 | Tab | Purpose |
@@ -212,6 +246,7 @@ A comprehensive NOC (Network Operation Center) tool where AI agents act as NOC e
 - `pending_actions` - Actions awaiting user confirmation (Phase 7)
 - `agent_settings` - Global agent configuration (Phase 7)
 - `network_diagnostics` - Ping and traceroute history (Phase 7)
+- `routing_optimizations` - AI routing recommendations (Phase 7)
 
 ## Device Model (Enhanced - Phase 7)
 ```python
