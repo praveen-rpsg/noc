@@ -5,6 +5,7 @@ import { Button } from '../components/ui/button';
 import { ScrollArea } from '../components/ui/scroll-area';
 import { Badge } from '../components/ui/badge';
 import PendingActionsNotification from './PendingActionsNotification';
+import { VoiceAlertControls } from './VoiceAlertService';
 import { 
   LayoutDashboard, 
   Monitor, 
@@ -227,8 +228,9 @@ export const MainLayout = ({ children }) => {
   return (
     <div className="min-h-screen bg-background">
       <Sidebar notificationCount={notificationCount} />
-      {/* Top bar with pending actions */}
-      <div className="fixed top-4 right-6 z-50">
+      {/* Top bar with pending actions and voice controls */}
+      <div className="fixed top-4 right-6 z-50 flex items-center gap-4">
+        <VoiceAlertControls />
         <PendingActionsNotification />
       </div>
       <main 

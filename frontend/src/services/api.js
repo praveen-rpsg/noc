@@ -127,4 +127,8 @@ export const agentExecApi = {
     axios.post(`${API}/agent-exec/diagnostics/traceroute`, { target, max_hops: maxHops, device_id: deviceId }),
   
   getDiagnosticsHistory: (params) => axios.get(`${API}/agent-exec/diagnostics/history`, { params }),
+  
+  // Routing Optimization
+  getRoutingOptimization: () => axios.post(`${API}/agent-exec/routing/optimize`),
+  getRoutingHistory: (params) => axios.get(`${API}/agent-exec/routing/history`, { params }),
 };

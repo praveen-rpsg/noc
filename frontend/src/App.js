@@ -4,6 +4,7 @@ import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { AuthProvider, useAuth } from "./context/AuthContext";
 import { Toaster } from "./components/ui/sonner";
 import { MainLayout } from "./components/Layout";
+import { VoiceAlertProvider, VoiceSettingsDialog } from "./components/VoiceAlertService";
 
 // Pages
 import LoginPage from "./pages/LoginPage";
@@ -191,8 +192,11 @@ function App() {
   return (
     <BrowserRouter>
       <AuthProvider>
-        <AppRoutes />
-        <Toaster position="top-right" richColors />
+        <VoiceAlertProvider>
+          <AppRoutes />
+          <VoiceSettingsDialog />
+          <Toaster position="top-right" richColors />
+        </VoiceAlertProvider>
       </AuthProvider>
     </BrowserRouter>
   );

@@ -1755,6 +1755,149 @@ async def get_diagnostics_history(
     
     return diagnostics
 
+@agent_exec_router.post("/routing/optimize")
+async def get_routing_optimization(current_user: dict = Depends(get_current_user)):
+    """AI-powered routing protocol optimization suggestions for the network"""
+    
+    # Get all devices
+    devices = await db.devices.find({}, {"_id": 0}).to_list(100)
+    
+    # Get network topology info
+    routers = [d for d in devices if d.get('type') == 'router']
+    switches = [d for d in devices if d.get('type') == 'switch']
+    firewalls = [d for d in devices if d.get('type') == 'firewall']
+    
+    # Build network context
+    network_context = f"""
+=== NETWORK TOPOLOGY SUMMARY ===
+Total Devices: {len(devices)}
+- Routers: {len(routers)}
+- Switches: {len(switches)}
+- Firewalls: {len(firewalls)}
+- Other devices: {len(devices) - len(routers) - len(switches) - len(firewalls)}
+
+=== ROUTER DETAILS ===
+"""
+    for router in routers:
+        network_context += f"- {router.get('name')}: {router.get('vendor', 'Unknown')} {router.get('model', '')} at {router.get('location', 'Unknown')}\n"
+    
+    network_context += "\n=== SWITCH DETAILS ===\n"
+    for switch in switches:
+        network_context += f"- {switch.get('name')}: {switch.get('vendor', 'Unknown')} {switch.get('model', '')} at {switch.get('location', 'Unknown')}\n"
+    
+    # Get recent alerts for network issues
+    recent_alerts = await db.alerts.find(
+        {"status": {"$ne": "resolved"}},
+        {"_id": 0}
+    ).sort("created_at", -1).to_list(20)
+    
+    if recent_alerts:
+        network_context += "\n=== RECENT NETWORK ALERTS ===\n"
+        for alert in recent_alerts[:10]:
+            network_context += f"- [{alert.get('severity', 'N/A').upper()}] {alert.get('title', 'Unknown')} on {alert.get('device_name', 'Unknown')}\n"
+    
+    # Get unique locations
+    locations = list(set([d.get('location', 'Unknown') for d in devices if d.get('location')]))
+    network_context += f"\n=== SITE LOCATIONS ({len(locations)}) ===\n"
+    for loc in locations:
+        devices_at_loc = [d for d in devices if d.get('location') == loc]
+        network_context += f"- {loc}: {len(devices_at_loc)} devices\n"
+    
+    analysis = await get_ai_analysis(
+        network_context,
+        """You are a senior network architect. Analyze this network topology and provide comprehensive routing protocol optimization recommendations.
+
+Please provide a detailed JSON response with the following structure:
+{
+  "network_assessment": {
+    "size": "small/medium/large/enterprise",
+    "complexity": "low/medium/high",
+    "current_challenges": ["list of identified issues"]
+  },
+  "recommended_protocol": {
+    "primary": "OSPF/EIGRP/BGP/IS-IS/RIP",
+    "rationale": "Why this protocol is recommended",
+    "alternative": "Alternative protocol if primary not suitable"
+  },
+  "configuration_suggestions": [
+    {
+      "area": "Core/Distribution/Access/WAN",
+      "protocol": "Protocol name",
+      "config_snippet": "Example configuration",
+      "best_practices": ["List of best practices"]
+    }
+  ],
+  "ospf_design": {
+    "recommended": true/false,
+    "area_design": "Single area or multi-area design description",
+    "area_assignments": [{"area": "0", "devices": ["device names"]}]
+  },
+  "bgp_considerations": {
+    "needed": true/false,
+    "use_case": "When/why BGP would be needed",
+    "as_design": "AS number recommendations"
+  },
+  "redundancy_recommendations": [
+    "List of redundancy improvements"
+  ],
+  "convergence_optimization": [
+    "Tips to improve network convergence time"
+  ],
+  "security_recommendations": [
+    "Routing security best practices"
+  ],
+  "implementation_priority": [
+    {"priority": 1, "action": "First action to take", "impact": "high/medium/low"},
+    {"priority": 2, "action": "Second action", "impact": "high/medium/low"}
+  ]
+}
+
+Return ONLY valid JSON, no markdown or additional text."""
+    )
+    
+    # Try to parse the AI response
+    try:
+        import re
+        json_match = re.search(r'\{[\s\S]*\}', analysis)
+        if json_match:
+            optimization_data = json.loads(json_match.group())
+        else:
+            optimization_data = {"raw_analysis": analysis}
+    except:
+        optimization_data = {"raw_analysis": analysis}
+    
+    result = {
+        "id": str(uuid.uuid4()),
+        "network_summary": {
+            "total_devices": len(devices),
+            "routers": len(routers),
+            "switches": len(switches),
+            "firewalls": len(firewalls),
+            "locations": locations,
+            "active_alerts": len(recent_alerts)
+        },
+        "optimization": optimization_data,
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "generated_by": current_user["name"]
+    }
+    
+    # Store the recommendation
+    await db.routing_optimizations.insert_one(result.copy())
+    
+    return result
+
+@agent_exec_router.get("/routing/history")
+async def get_routing_optimization_history(
+    limit: int = 10,
+    current_user: dict = Depends(get_current_user)
+):
+    """Get history of routing optimization recommendations"""
+    history = await db.routing_optimizations.find(
+        {}, {"_id": 0}
+    ).sort("generated_at", -1).to_list(limit)
+    
+    return history
+
 # ===================== AUTH ROUTES =====================
 @auth_router.post("/register", response_model=TokenResponse)
 async def register(user_data: UserCreate):

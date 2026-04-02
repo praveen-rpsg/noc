@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from './ui/dialog';
 import { Button } from './ui/button';
 import { Badge } from './ui/badge';
@@ -9,6 +10,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from './ui/tabs';
 import { ScrollArea } from './ui/scroll-area';
 import { agentExecApi } from '../services/api';
 import { toast } from 'sonner';
+import { useVoiceAlert } from './VoiceAlertService';
 import {
   Activity,
   ArrowRight,
@@ -22,7 +24,10 @@ import {
   AlertTriangle,
   Loader2,
   Play,
-  RefreshCw
+  RefreshCw,
+  Network,
+  Brain,
+  Settings
 } from 'lucide-react';
 
 const HopTypeIcon = ({ type }) => {
@@ -44,8 +49,11 @@ export default function NetworkDiagnosticsModal({
   onClose, 
   defaultTarget = '',
   deviceId = null,
-  deviceName = null 
+  deviceName = null,
+  onShowOnTopology = null  // Callback to show path on topology
 }) {
+  const navigate = useNavigate();
+  const { announceNetworkFailure, announceTracerouteIssue, isMuted } = useVoiceAlert();
   const [activeTab, setActiveTab] = useState('ping');
   const [target, setTarget] = useState(defaultTarget);
   const [pingResult, setPingResult] = useState(null);
@@ -53,6 +61,10 @@ export default function NetworkDiagnosticsModal({
   const [pingLoading, setPingLoading] = useState(false);
   const [tracerouteLoading, setTracerouteLoading] = useState(false);
   const [autoRefresh, setAutoRefresh] = useState(false);
+  
+  // Routing optimization state
+  const [routingOptimization, setRoutingOptimization] = useState(null);
+  const [routingLoading, setRoutingLoading] = useState(false);
 
   // Auto-run diagnostics when modal opens with a target
   useEffect(() => {
@@ -85,6 +97,14 @@ export default function NetworkDiagnosticsModal({
     try {
       const response = await agentExecApi.runPing(pingTarget, 4, deviceId);
       setPingResult(response.data);
+      
+      // Voice alert for unreachable or high packet loss
+      if (response.data.status === 'unreachable') {
+        announceNetworkFailure(deviceName || pingTarget, 'unreachable', 'Device is not responding to ping.');
+      } else if (response.data.packet_loss_percent > 50) {
+        announceNetworkFailure(deviceName || pingTarget, 'packet_loss', `${response.data.packet_loss_percent}% packet loss detected.`);
+      }
+      
       if (!silent) {
         toast.success(`Ping to ${pingTarget} completed`);
       }
@@ -109,12 +129,45 @@ export default function NetworkDiagnosticsModal({
     try {
       const response = await agentExecApi.runTraceroute(traceTarget, 30, deviceId);
       setTracerouteResult(response.data);
+      
+      // Voice alert for traceroute issues
+      if (response.data.issues_detected?.length > 0) {
+        announceTracerouteIssue(traceTarget, response.data.issues_detected);
+      }
+      
       toast.success(`Traceroute to ${traceTarget} completed`);
     } catch (error) {
       toast.error('Failed to run traceroute');
       setTracerouteResult(null);
     } finally {
       setTracerouteLoading(false);
+    }
+  };
+
+  const runRoutingOptimization = async () => {
+    setRoutingLoading(true);
+    try {
+      const response = await agentExecApi.getRoutingOptimization();
+      setRoutingOptimization(response.data);
+      toast.success('Routing optimization analysis complete');
+    } catch (error) {
+      toast.error('Failed to get routing optimization');
+      setRoutingOptimization(null);
+    } finally {
+      setRoutingLoading(false);
+    }
+  };
+
+  const handleShowOnTopology = () => {
+    if (tracerouteResult?.hops) {
+      // Store traceroute data in sessionStorage for the topology page
+      sessionStorage.setItem('highlightedPath', JSON.stringify({
+        target: target,
+        hops: tracerouteResult.hops,
+        timestamp: new Date().toISOString()
+      }));
+      onClose();
+      navigate('/topology?showPath=true');
     }
   };
 
@@ -182,7 +235,7 @@ export default function NetworkDiagnosticsModal({
         </div>
 
         <Tabs value={activeTab} onValueChange={setActiveTab} className="flex-1 flex flex-col">
-          <TabsList className="grid w-full grid-cols-2">
+          <TabsList className="grid w-full grid-cols-3">
             <TabsTrigger value="ping" className="flex items-center gap-2">
               <Activity className="h-4 w-4" />
               Ping Status
@@ -198,6 +251,10 @@ export default function NetworkDiagnosticsModal({
                   {tracerouteResult.total_hops} hops
                 </Badge>
               )}
+            </TabsTrigger>
+            <TabsTrigger value="routing" className="flex items-center gap-2">
+              <Settings className="h-4 w-4" />
+              Routing AI
             </TabsTrigger>
           </TabsList>
 
@@ -470,11 +527,169 @@ export default function NetworkDiagnosticsModal({
                         </CardContent>
                       </Card>
                     </div>
+                    
+                    {/* Show on Topology Button */}
+                    <Button 
+                      className="w-full mt-4"
+                      variant="outline"
+                      onClick={handleShowOnTopology}
+                    >
+                      <Network className="h-4 w-4 mr-2" />
+                      Show Path on Network Topology
+                    </Button>
                   </div>
                 ) : (
                   <div className="text-center py-12 text-muted-foreground">
                     <MapPin className="h-12 w-12 mx-auto mb-4 opacity-50" />
                     <p>Enter a target and click "Run All" to trace the route</p>
+                  </div>
+                )}
+              </div>
+            </ScrollArea>
+          </TabsContent>
+
+          {/* Routing Optimization Tab */}
+          <TabsContent value="routing" className="flex-1 overflow-hidden">
+            <ScrollArea className="h-[400px]">
+              <div className="space-y-4 pr-4">
+                <div className="flex items-center justify-between">
+                  <p className="text-sm text-muted-foreground">
+                    AI-powered routing protocol optimization suggestions
+                  </p>
+                  <Button 
+                    onClick={runRoutingOptimization}
+                    disabled={routingLoading}
+                  >
+                    {routingLoading ? (
+                      <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                    ) : (
+                      <Brain className="h-4 w-4 mr-2" />
+                    )}
+                    Analyze Network
+                  </Button>
+                </div>
+
+                {routingLoading ? (
+                  <div className="flex flex-col items-center justify-center py-12">
+                    <Loader2 className="h-8 w-8 animate-spin text-purple-600 mb-4" />
+                    <p className="text-muted-foreground">Analyzing network topology...</p>
+                  </div>
+                ) : routingOptimization ? (
+                  <div className="space-y-4">
+                    {/* Network Summary */}
+                    <Card className="bg-slate-50">
+                      <CardContent className="p-4">
+                        <p className="text-sm font-medium mb-2">Network Summary</p>
+                        <div className="grid grid-cols-4 gap-2 text-center">
+                          <div>
+                            <p className="text-lg font-bold">{routingOptimization.network_summary?.total_devices || 0}</p>
+                            <p className="text-xs text-muted-foreground">Total Devices</p>
+                          </div>
+                          <div>
+                            <p className="text-lg font-bold">{routingOptimization.network_summary?.routers || 0}</p>
+                            <p className="text-xs text-muted-foreground">Routers</p>
+                          </div>
+                          <div>
+                            <p className="text-lg font-bold">{routingOptimization.network_summary?.switches || 0}</p>
+                            <p className="text-xs text-muted-foreground">Switches</p>
+                          </div>
+                          <div>
+                            <p className="text-lg font-bold">{routingOptimization.network_summary?.locations?.length || 0}</p>
+                            <p className="text-xs text-muted-foreground">Locations</p>
+                          </div>
+                        </div>
+                      </CardContent>
+                    </Card>
+
+                    {/* Recommended Protocol */}
+                    {routingOptimization.optimization?.recommended_protocol && (
+                      <Card className="bg-purple-50 border-purple-200">
+                        <CardContent className="p-4">
+                          <div className="flex items-center gap-2 mb-2">
+                            <Settings className="h-5 w-5 text-purple-600" />
+                            <p className="font-medium text-purple-800">Recommended Protocol</p>
+                          </div>
+                          <p className="text-2xl font-bold text-purple-700 mb-2">
+                            {routingOptimization.optimization.recommended_protocol.primary}
+                          </p>
+                          <p className="text-sm text-purple-700">
+                            {routingOptimization.optimization.recommended_protocol.rationale}
+                          </p>
+                          {routingOptimization.optimization.recommended_protocol.alternative && (
+                            <p className="text-xs text-purple-600 mt-2">
+                              Alternative: {routingOptimization.optimization.recommended_protocol.alternative}
+                            </p>
+                          )}
+                        </CardContent>
+                      </Card>
+                    )}
+
+                    {/* Network Assessment */}
+                    {routingOptimization.optimization?.network_assessment && (
+                      <Card>
+                        <CardContent className="p-4">
+                          <p className="text-sm font-medium mb-2">Network Assessment</p>
+                          <div className="flex gap-2 mb-2">
+                            <Badge variant="outline">Size: {routingOptimization.optimization.network_assessment.size}</Badge>
+                            <Badge variant="outline">Complexity: {routingOptimization.optimization.network_assessment.complexity}</Badge>
+                          </div>
+                          {routingOptimization.optimization.network_assessment.current_challenges?.length > 0 && (
+                            <div className="mt-2">
+                              <p className="text-xs font-medium mb-1">Challenges:</p>
+                              <ul className="text-xs text-muted-foreground space-y-1">
+                                {routingOptimization.optimization.network_assessment.current_challenges.map((c, i) => (
+                                  <li key={i}>• {c}</li>
+                                ))}
+                              </ul>
+                            </div>
+                          )}
+                        </CardContent>
+                      </Card>
+                    )}
+
+                    {/* Implementation Priority */}
+                    {routingOptimization.optimization?.implementation_priority?.length > 0 && (
+                      <Card>
+                        <CardContent className="p-4">
+                          <p className="text-sm font-medium mb-2">Implementation Priority</p>
+                          <div className="space-y-2">
+                            {routingOptimization.optimization.implementation_priority.map((item, idx) => (
+                              <div key={idx} className="flex items-center gap-3 p-2 bg-slate-50 rounded">
+                                <div className={`w-8 h-8 rounded-full flex items-center justify-center text-white font-bold ${
+                                  item.impact === 'high' ? 'bg-red-500' :
+                                  item.impact === 'medium' ? 'bg-amber-500' : 'bg-green-500'
+                                }`}>
+                                  {item.priority}
+                                </div>
+                                <div className="flex-1">
+                                  <p className="text-sm">{item.action}</p>
+                                  <Badge variant="outline" className="text-xs mt-1">
+                                    {item.impact} impact
+                                  </Badge>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </CardContent>
+                      </Card>
+                    )}
+
+                    {/* Raw Analysis if no structured data */}
+                    {routingOptimization.optimization?.raw_analysis && (
+                      <Card>
+                        <CardContent className="p-4">
+                          <p className="text-sm font-medium mb-2">Analysis</p>
+                          <pre className="text-xs whitespace-pre-wrap bg-slate-50 p-3 rounded">
+                            {routingOptimization.optimization.raw_analysis}
+                          </pre>
+                        </CardContent>
+                      </Card>
+                    )}
+                  </div>
+                ) : (
+                  <div className="text-center py-12 text-muted-foreground">
+                    <Brain className="h-12 w-12 mx-auto mb-4 opacity-50" />
+                    <p>Click "Analyze Network" to get AI-powered routing optimization suggestions</p>
                   </div>
                 )}
               </div>

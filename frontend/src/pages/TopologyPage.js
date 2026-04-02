@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { useLocation } from 'react-router-dom';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
 import { Button } from '../components/ui/button';
 import { Badge } from '../components/ui/badge';
@@ -17,7 +18,9 @@ import {
   Lock,
   Unlock,
   ExternalLink,
-  Settings
+  Settings,
+  Route,
+  X
 } from 'lucide-react';
 
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
@@ -125,6 +128,31 @@ export default function TopologyPage() {
   const [configDialogOpen, setConfigDialogOpen] = useState(false);
   const [deviceUrls, setDeviceUrls] = useState({});
   const [editingDeviceUrl, setEditingDeviceUrl] = useState('');
+  
+  // Highlighted path from traceroute
+  const [highlightedPath, setHighlightedPath] = useState(null);
+  const location = useLocation();
+
+  // Check for highlighted path from sessionStorage
+  useEffect(() => {
+    const params = new URLSearchParams(location.search);
+    if (params.get('showPath') === 'true') {
+      const pathData = sessionStorage.getItem('highlightedPath');
+      if (pathData) {
+        try {
+          setHighlightedPath(JSON.parse(pathData));
+          toast.success('Showing traceroute path on topology');
+        } catch (e) {
+          console.error('Failed to parse path data');
+        }
+      }
+    }
+  }, [location]);
+
+  const clearHighlightedPath = () => {
+    setHighlightedPath(null);
+    sessionStorage.removeItem('highlightedPath');
+  };
 
   const fetchTopology = async () => {
     try {
@@ -726,6 +754,34 @@ export default function TopologyPage() {
           </Button>
         </div>
       </div>
+
+      {/* Highlighted Path Banner */}
+      {highlightedPath && (
+        <Card className="bg-cyan-50 border-cyan-200 mb-4">
+          <CardContent className="p-4 flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <Route className="h-5 w-5 text-cyan-600" />
+              <div>
+                <p className="font-medium text-cyan-800">
+                  Traceroute Path to {highlightedPath.target}
+                </p>
+                <p className="text-sm text-cyan-700">
+                  {highlightedPath.hops?.length || 0} hops • Path is highlighted on the topology map
+                </p>
+              </div>
+            </div>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={clearHighlightedPath}
+              className="text-cyan-700 hover:bg-cyan-100"
+            >
+              <X className="h-4 w-4 mr-1" />
+              Clear Path
+            </Button>
+          </CardContent>
+        </Card>
+      )}
 
       {/* Stats */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
