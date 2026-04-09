@@ -1,134 +1,151 @@
 import axios from 'axios';
+import { getApiUrl, getBackendUrlSync, initConfig } from './config';
 
-const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
-const API = `${BACKEND_URL}/api`;
+// Initialize API URL - will be updated after config loads
+let API = `${getBackendUrlSync()}/api`;
+
+// Function to reinitialize API after config loads
+export const initializeApi = async () => {
+  await initConfig();
+  API = getApiUrl();
+  return API;
+};
+
+// Helper to get current API URL
+export const getAPI = () => API;
+
+// Create axios instance that always uses current API URL
+const apiCall = (method, endpoint, options = {}) => {
+  const url = `${API}${endpoint}`;
+  return axios({ method, url, ...options });
+};
 
 // Devices API
 export const devicesApi = {
-  getAll: () => axios.get(`${API}/devices`),
-  getOne: (id) => axios.get(`${API}/devices/${id}`),
-  create: (data) => axios.post(`${API}/devices`, data),
-  update: (id, data) => axios.put(`${API}/devices/${id}`, data),
-  delete: (id) => axios.delete(`${API}/devices/${id}`),
+  getAll: () => apiCall('get', '/devices'),
+  getOne: (id) => apiCall('get', `/devices/${id}`),
+  create: (data) => apiCall('post', '/devices', { data }),
+  update: (id, data) => apiCall('put', `/devices/${id}`, { data }),
+  delete: (id) => apiCall('delete', `/devices/${id}`),
 };
 
 // Alerts API
 export const alertsApi = {
-  getAll: (params) => axios.get(`${API}/alerts`, { params }),
-  getOne: (id) => axios.get(`${API}/alerts/${id}`),
-  create: (data) => axios.post(`${API}/alerts`, data),
-  acknowledge: (id) => axios.put(`${API}/alerts/${id}/acknowledge`),
-  resolve: (id) => axios.put(`${API}/alerts/${id}/resolve`),
-  aiTroubleshoot: (id) => axios.post(`${API}/alerts/${id}/ai-troubleshoot`),
+  getAll: (params) => apiCall('get', '/alerts', { params }),
+  getOne: (id) => apiCall('get', `/alerts/${id}`),
+  create: (data) => apiCall('post', '/alerts', { data }),
+  acknowledge: (id) => apiCall('put', `/alerts/${id}/acknowledge`),
+  resolve: (id) => apiCall('put', `/alerts/${id}/resolve`),
+  aiTroubleshoot: (id) => apiCall('post', `/alerts/${id}/ai-troubleshoot`),
 };
 
 // Incidents API
 export const incidentsApi = {
-  getAll: (params) => axios.get(`${API}/incidents`, { params }),
-  getOne: (id) => axios.get(`${API}/incidents/${id}`),
-  create: (data) => axios.post(`${API}/incidents`, data),
-  update: (id, data) => axios.put(`${API}/incidents/${id}`, data),
-  getAiAnalysis: (id) => axios.post(`${API}/incidents/${id}/ai-analysis`),
-  aiTroubleshoot: (id) => axios.post(`${API}/incidents/${id}/ai-troubleshoot`),
+  getAll: (params) => apiCall('get', '/incidents', { params }),
+  getOne: (id) => apiCall('get', `/incidents/${id}`),
+  create: (data) => apiCall('post', '/incidents', { data }),
+  update: (id, data) => apiCall('put', `/incidents/${id}`, { data }),
+  getAiAnalysis: (id) => apiCall('post', `/incidents/${id}/ai-analysis`),
+  aiTroubleshoot: (id) => apiCall('post', `/incidents/${id}/ai-troubleshoot`),
 };
 
 // Performance API
 export const performanceApi = {
-  getMetrics: (params) => axios.get(`${API}/performance`, { params }),
-  createMetric: (data) => axios.post(`${API}/performance`, data),
+  getMetrics: (params) => apiCall('get', '/performance', { params }),
+  createMetric: (data) => apiCall('post', '/performance', { data }),
 };
 
 // Assets API
 export const assetsApi = {
-  getAll: () => axios.get(`${API}/assets`),
-  getOne: (id) => axios.get(`${API}/assets/${id}`),
-  create: (data) => axios.post(`${API}/assets`, data),
-  update: (id, data) => axios.put(`${API}/assets/${id}`, data),
-  delete: (id) => axios.delete(`${API}/assets/${id}`),
+  getAll: () => apiCall('get', '/assets'),
+  getOne: (id) => apiCall('get', `/assets/${id}`),
+  create: (data) => apiCall('post', '/assets', { data }),
+  update: (id, data) => apiCall('put', `/assets/${id}`, { data }),
+  delete: (id) => apiCall('delete', `/assets/${id}`),
 };
 
 // Reports API
 export const reportsApi = {
-  getAll: (params) => axios.get(`${API}/reports`, { params }),
+  getAll: (params) => apiCall('get', '/reports', { params }),
   generate: (type, periodStart, periodEnd) => 
-    axios.post(`${API}/reports/generate?report_type=${type}&period_start=${periodStart}&period_end=${periodEnd}`),
+    apiCall('post', `/reports/generate?report_type=${type}&period_start=${periodStart}&period_end=${periodEnd}`),
 };
 
 // Config API
 export const configApi = {
-  getAll: (params) => axios.get(`${API}/config`, { params }),
+  getAll: (params) => apiCall('get', '/config', { params }),
   backup: (deviceId, configType, configData) => 
-    axios.post(`${API}/config/backup?device_id=${deviceId}&config_type=${configType}&config_data=${encodeURIComponent(configData)}`),
+    apiCall('post', `/config/backup?device_id=${deviceId}&config_type=${configType}&config_data=${encodeURIComponent(configData)}`),
 };
 
 // SLA API
 export const slaApi = {
-  getAll: () => axios.get(`${API}/sla`),
-  getMetrics: () => axios.get(`${API}/sla/metrics`),
+  getAll: () => apiCall('get', '/sla'),
+  getMetrics: () => apiCall('get', '/sla/metrics'),
 };
 
 // AI API
 export const aiApi = {
   analyze: (context, query, incidentId) => 
-    axios.post(`${API}/ai/analyze`, { context, query, incident_id: incidentId }),
+    apiCall('post', '/ai/analyze', { data: { context, query, incident_id: incidentId } }),
   analyzeTraceroute: (target, output) => 
-    axios.post(`${API}/ai/traceroute-analysis`, { target, traceroute_output: output }),
+    apiCall('post', '/ai/traceroute-analysis', { data: { target, traceroute_output: output } }),
   analyzeLogs: (logs) => 
-    axios.post(`${API}/ai/log-analysis`, { logs }),
+    apiCall('post', '/ai/log-analysis', { data: { logs } }),
 };
 
 // Dashboard API
 export const dashboardApi = {
-  getStats: () => axios.get(`${API}/dashboard/stats`),
-  getRecentAlerts: (limit = 10) => axios.get(`${API}/dashboard/recent-alerts?limit=${limit}`),
-  getRecentIncidents: (limit = 10) => axios.get(`${API}/dashboard/recent-incidents?limit=${limit}`),
+  getStats: () => apiCall('get', '/dashboard/stats'),
+  getRecentAlerts: (limit = 10) => apiCall('get', `/dashboard/recent-alerts?limit=${limit}`),
+  getRecentIncidents: (limit = 10) => apiCall('get', `/dashboard/recent-incidents?limit=${limit}`),
 };
 
 // Seed Demo Data
-export const seedDemoData = () => axios.post(`${API}/seed`);
+export const seedDemoData = () => apiCall('post', '/seed');
 
 // Autonomous Agent Execution API
 export const agentExecApi = {
   // Run agent on incident
-  runOnIncident: (incidentId) => axios.post(`${API}/agent-exec/run/${incidentId}`),
+  runOnIncident: (incidentId) => apiCall('post', `/agent-exec/run/${incidentId}`),
   
   // Get all executions
-  getExecutions: (params) => axios.get(`${API}/agent-exec/executions`, { params }),
+  getExecutions: (params) => apiCall('get', '/agent-exec/executions', { params }),
   
   // Get specific execution
-  getExecution: (executionId) => axios.get(`${API}/agent-exec/executions/${executionId}`),
+  getExecution: (executionId) => apiCall('get', `/agent-exec/executions/${executionId}`),
   
   // Get pending actions requiring confirmation
-  getPendingActions: () => axios.get(`${API}/agent-exec/pending-actions`),
+  getPendingActions: () => apiCall('get', '/agent-exec/pending-actions'),
   
   // Get pending actions count
-  getPendingCount: () => axios.get(`${API}/agent-exec/pending-actions/count`),
+  getPendingCount: () => apiCall('get', '/agent-exec/pending-actions/count'),
   
   // Approve an action
-  approveAction: (actionId) => axios.post(`${API}/agent-exec/actions/${actionId}/approve`),
+  approveAction: (actionId) => apiCall('post', `/agent-exec/actions/${actionId}/approve`),
   
   // Reject an action
-  rejectAction: (actionId, reason) => axios.post(`${API}/agent-exec/actions/${actionId}/reject`, null, { params: { reason } }),
+  rejectAction: (actionId, reason) => apiCall('post', `/agent-exec/actions/${actionId}/reject`, { params: { reason } }),
   
   // Get agent settings
-  getSettings: () => axios.get(`${API}/agent-exec/settings`),
+  getSettings: () => apiCall('get', '/agent-exec/settings'),
   
   // Update agent settings
-  updateSettings: (settings) => axios.put(`${API}/agent-exec/settings`, settings),
+  updateSettings: (settings) => apiCall('put', '/agent-exec/settings', { data: settings }),
   
   // Get execution log for incident
-  getExecutionLog: (incidentId) => axios.get(`${API}/agent-exec/execution-log/${incidentId}`),
+  getExecutionLog: (incidentId) => apiCall('get', `/agent-exec/execution-log/${incidentId}`),
   
   // Network Diagnostics
   runPing: (target, count = 4, deviceId = null) => 
-    axios.post(`${API}/agent-exec/diagnostics/ping`, { target, count, device_id: deviceId }),
+    apiCall('post', '/agent-exec/diagnostics/ping', { data: { target, count, device_id: deviceId } }),
   
   runTraceroute: (target, maxHops = 30, deviceId = null) => 
-    axios.post(`${API}/agent-exec/diagnostics/traceroute`, { target, max_hops: maxHops, device_id: deviceId }),
+    apiCall('post', '/agent-exec/diagnostics/traceroute', { data: { target, max_hops: maxHops, device_id: deviceId } }),
   
-  getDiagnosticsHistory: (params) => axios.get(`${API}/agent-exec/diagnostics/history`, { params }),
+  getDiagnosticsHistory: (params) => apiCall('get', '/agent-exec/diagnostics/history', { params }),
   
   // Routing Optimization
-  getRoutingOptimization: () => axios.post(`${API}/agent-exec/routing/optimize`),
-  getRoutingHistory: (params) => axios.get(`${API}/agent-exec/routing/history`, { params }),
+  getRoutingOptimization: () => apiCall('post', '/agent-exec/routing/optimize'),
+  getRoutingHistory: (params) => apiCall('get', '/agent-exec/routing/history', { params }),
 };

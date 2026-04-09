@@ -1,12 +1,48 @@
 const { app, BrowserWindow, Menu, shell, ipcMain, dialog } = require('electron');
 const path = require('path');
 const url = require('url');
+const fs = require('fs');
 
 // Keep a global reference of the window object
 let mainWindow;
 
 // Check if running in development
 const isDev = process.env.NODE_ENV === 'development' || !app.isPackaged;
+
+// Configuration file path for storing backend URL
+const configPath = path.join(app.getPath('userData'), 'config.json');
+
+// Default configuration
+const defaultConfig = {
+  backendUrl: 'http://localhost:8001'
+};
+
+// Load or create configuration
+function loadConfig() {
+  try {
+    if (fs.existsSync(configPath)) {
+      const data = fs.readFileSync(configPath, 'utf8');
+      return { ...defaultConfig, ...JSON.parse(data) };
+    }
+  } catch (error) {
+    console.error('Error loading config:', error);
+  }
+  return defaultConfig;
+}
+
+// Save configuration
+function saveConfig(config) {
+  try {
+    fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
+    return true;
+  } catch (error) {
+    console.error('Error saving config:', error);
+    return false;
+  }
+}
+
+// Get current config
+let appConfig = defaultConfig;
 
 function createWindow() {
   // Create the browser window
@@ -217,6 +253,21 @@ ipcMain.handle('get-platform', () => {
   return process.platform;
 });
 
+// Backend URL configuration handlers
+ipcMain.handle('get-backend-url', () => {
+  return appConfig.backendUrl;
+});
+
+ipcMain.handle('set-backend-url', (event, url) => {
+  appConfig.backendUrl = url;
+  saveConfig(appConfig);
+  return true;
+});
+
+ipcMain.handle('get-config', () => {
+  return appConfig;
+});
+
 ipcMain.on('show-notification', (event, { title, body }) => {
   const { Notification } = require('electron');
   if (Notification.isSupported()) {
@@ -226,6 +277,9 @@ ipcMain.on('show-notification', (event, { title, body }) => {
 
 // This method will be called when Electron has finished initialization
 app.whenReady().then(() => {
+  // Load configuration before creating window
+  appConfig = loadConfig();
+  
   createWindow();
 
   app.on('activate', () => {

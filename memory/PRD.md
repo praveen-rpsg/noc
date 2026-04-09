@@ -244,9 +244,26 @@ A comprehensive NOC (Network Operation Center) tool where AI agents act as NOC e
 | `yarn electron:build:linux` | Linux packages |
 | `yarn electron:build:all` | All platforms |
 
-## New Settings Tabs (Phase 6)
+### Phase 9 - Authentication & Connection Fixes (2026-04-09)
+
+#### 1. Dynamic Backend URL Configuration
+- ✅ **Config Service**: New `services/config.js` for managing backend URL
+- ✅ **Electron IPC**: Backend URL stored in user data directory for persistence
+- ✅ **Browser Fallback**: Uses localStorage when running in browser
+- ✅ **Connection Settings Tab**: New tab in Settings page for URL configuration
+- ✅ **Connection Test**: Test button to verify backend connectivity
+- ✅ **Health Endpoint**: Added `/api/health` endpoint for connection testing
+
+#### 2. Authentication Flow Updates
+- ✅ **AuthContext**: Updated to use dynamic API URL
+- ✅ **API Service**: All API calls now use dynamic URL getter
+- ✅ **Login**: Verified working with dynamic backend URL
+- ✅ **Registration**: Verified working - new users auto-login after registration
+
+## New Settings Tabs (Phase 6 & 9)
 | Tab | Purpose |
 |-----|---------|
+| Connection | Backend URL configuration (NEW) |
 | Email | Office 365 SMTP configuration |
 | SNMP | v1/v2c community strings, v3 with auth/privacy |
 | OpenStack | Cloud infrastructure monitoring |

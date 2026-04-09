@@ -1,8 +1,6 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import axios from 'axios';
-
-const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
-const API = `${BACKEND_URL}/api`;
+import { initConfig, getApiUrl, getBackendUrlSync } from '../services/config';
 
 const AuthContext = createContext(null);
 
@@ -18,18 +16,20 @@ export const AuthProvider = ({ children }) => {
   const [user, setUser] = useState(null);
   const [token, setToken] = useState(localStorage.getItem('noc_token'));
   const [loading, setLoading] = useState(true);
-
+  const [apiReady, setApiReady] = useState(false);
+  
+  // Initialize config and API URL
   useEffect(() => {
-    if (token) {
-      axios.defaults.headers.common['Authorization'] = `Bearer ${token}`;
-      fetchUser();
-    } else {
-      setLoading(false);
-    }
-  }, [token]);
+    const init = async () => {
+      await initConfig();
+      setApiReady(true);
+    };
+    init();
+  }, []);
 
-  const fetchUser = async () => {
+  const fetchUser = useCallback(async () => {
     try {
+      const API = getApiUrl();
       const response = await axios.get(`${API}/auth/me`);
       setUser(response.data);
     } catch (error) {
@@ -38,9 +38,21 @@ export const AuthProvider = ({ children }) => {
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
+
+  useEffect(() => {
+    if (!apiReady) return;
+    
+    if (token) {
+      axios.defaults.headers.common['Authorization'] = `Bearer ${token}`;
+      fetchUser();
+    } else {
+      setLoading(false);
+    }
+  }, [token, apiReady, fetchUser]);
 
   const login = async (email, password) => {
+    const API = getApiUrl();
     const response = await axios.post(`${API}/auth/login`, { email, password });
     const { access_token, user: userData } = response.data;
     localStorage.setItem('noc_token', access_token);
@@ -51,6 +63,7 @@ export const AuthProvider = ({ children }) => {
   };
 
   const register = async (email, password, name, role = 'operator') => {
+    const API = getApiUrl();
     const response = await axios.post(`${API}/auth/register`, { email, password, name, role });
     const { access_token, user: userData } = response.data;
     localStorage.setItem('noc_token', access_token);
@@ -68,7 +81,7 @@ export const AuthProvider = ({ children }) => {
   };
 
   return (
-    <AuthContext.Provider value={{ user, token, login, register, logout, loading }}>
+    <AuthContext.Provider value={{ user, token, login, register, logout, loading: loading || !apiReady }}>
       {children}
     </AuthContext.Provider>
   );

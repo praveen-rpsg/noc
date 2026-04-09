@@ -7,6 +7,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getAppVersion: () => ipcRenderer.invoke('get-app-version'),
   getPlatform: () => ipcRenderer.invoke('get-platform'),
   
+  // Backend URL configuration
+  getBackendUrl: () => ipcRenderer.invoke('get-backend-url'),
+  setBackendUrl: (url) => ipcRenderer.invoke('set-backend-url', url),
+  getConfig: () => ipcRenderer.invoke('get-config'),
+  
   // Notifications
   showNotification: (title, body) => {
     ipcRenderer.send('show-notification', { title, body });

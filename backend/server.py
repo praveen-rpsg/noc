@@ -53,6 +53,11 @@ EMAIL_FROM = os.environ.get('EMAIL_FROM', 'noc@atech.com')
 # Create the main app
 app = FastAPI(title="ATECH NOC Commander API", version="2.0.0")
 
+# Health check endpoint (outside /api prefix for easy access)
+@app.get("/api/health")
+async def health_check():
+    return {"status": "healthy", "version": "2.0.0", "service": "ATECH NOC Commander"}
+
 # WebSocket connections for real-time alerts
 class ConnectionManager:
     def __init__(self):

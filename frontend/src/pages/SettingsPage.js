@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '../components/ui/card';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
@@ -12,6 +12,8 @@ import { Textarea } from '../components/ui/textarea';
 import { ScrollArea } from '../components/ui/scroll-area';
 import { toast } from 'sonner';
 import axios from 'axios';
+import { getApiUrl, getBackendUrlSync, setBackendUrl, testBackendConnection, isElectron } from '../services/config';
+import { initializeApi } from '../services/api';
 import {
   Settings,
   Mail,
@@ -34,11 +36,11 @@ import {
   Key,
   HardDrive,
   Play,
-  Calendar
+  Calendar,
+  Link,
+  Wifi,
+  WifiOff
 } from 'lucide-react';
-
-const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
-const API = `${BACKEND_URL}/api`;
 
 const getAuthHeader = () => {
   const token = localStorage.getItem('noc_token');
@@ -50,8 +52,9 @@ const useSettingsConfig = (endpoint) => {
   const [configs, setConfigs] = useState([]);
   const [loading, setLoading] = useState(true);
 
-  const fetchConfigs = async () => {
+  const fetchConfigs = useCallback(async () => {
     try {
+      const API = getApiUrl();
       const response = await axios.get(`${API}/settings/${endpoint}`, { headers: getAuthHeader() });
       setConfigs(response.data || []);
     } catch (error) {
@@ -59,32 +62,176 @@ const useSettingsConfig = (endpoint) => {
     } finally {
       setLoading(false);
     }
-  };
+  }, [endpoint]);
 
   const createConfig = async (data) => {
+    const API = getApiUrl();
     const response = await axios.post(`${API}/settings/${endpoint}`, data, { headers: getAuthHeader() });
     await fetchConfigs();
     return response.data;
   };
 
   const updateConfig = async (id, data) => {
+    const API = getApiUrl();
     const response = await axios.put(`${API}/settings/${endpoint}/${id}`, data, { headers: getAuthHeader() });
     await fetchConfigs();
     return response.data;
   };
 
   const deleteConfig = async (id) => {
+    const API = getApiUrl();
     await axios.delete(`${API}/settings/${endpoint}/${id}`, { headers: getAuthHeader() });
     await fetchConfigs();
   };
 
-  useEffect(() => { fetchConfigs(); }, []);
+  useEffect(() => { fetchConfigs(); }, [fetchConfigs]);
 
   return { configs, loading, fetchConfigs, createConfig, updateConfig, deleteConfig };
 };
 
+// Connection Settings Component
+function ConnectionSettings() {
+  const [backendUrl, setBackendUrlState] = useState(getBackendUrlSync());
+  const [testing, setTesting] = useState(false);
+  const [connectionStatus, setConnectionStatus] = useState(null);
+  const [saving, setSaving] = useState(false);
+
+  const handleTest = async () => {
+    setTesting(true);
+    setConnectionStatus(null);
+    try {
+      const isConnected = await testBackendConnection(backendUrl);
+      setConnectionStatus(isConnected ? 'connected' : 'failed');
+      if (isConnected) {
+        toast.success('Connection successful!');
+      } else {
+        toast.error('Connection failed. Check the URL and ensure backend is running.');
+      }
+    } catch (error) {
+      setConnectionStatus('failed');
+      toast.error('Connection test failed');
+    } finally {
+      setTesting(false);
+    }
+  };
+
+  const handleSave = async () => {
+    setSaving(true);
+    try {
+      await setBackendUrl(backendUrl);
+      await initializeApi();
+      toast.success('Backend URL saved. Please refresh the page to apply changes.');
+    } catch (error) {
+      toast.error('Failed to save configuration');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const isDesktopApp = isElectron();
+
+  return (
+    <Card className="bg-white border-border/50">
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <Link className="h-5 w-5 text-blue-600" />
+          Backend Connection Settings
+        </CardTitle>
+        <CardDescription>
+          Configure the backend server URL for API connectivity
+          {isDesktopApp && (
+            <Badge variant="outline" className="ml-2 text-purple-600 border-purple-300">
+              Desktop App
+            </Badge>
+          )}
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-6">
+        <div className="space-y-4">
+          <div className="space-y-2">
+            <Label htmlFor="backend-url">Backend Server URL</Label>
+            <div className="flex gap-2">
+              <Input
+                id="backend-url"
+                value={backendUrl}
+                onChange={(e) => setBackendUrlState(e.target.value)}
+                placeholder="http://localhost:8001"
+                className="flex-1"
+                data-testid="backend-url-input"
+              />
+              <Button
+                variant="outline"
+                onClick={handleTest}
+                disabled={testing}
+                data-testid="test-connection-btn"
+              >
+                {testing ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : connectionStatus === 'connected' ? (
+                  <Wifi className="h-4 w-4 text-green-500" />
+                ) : connectionStatus === 'failed' ? (
+                  <WifiOff className="h-4 w-4 text-red-500" />
+                ) : (
+                  <TestTube className="h-4 w-4" />
+                )}
+                Test
+              </Button>
+            </div>
+            <p className="text-sm text-muted-foreground">
+              The URL where your NOC Commander backend is running (e.g., http://localhost:8001)
+            </p>
+          </div>
+
+          {connectionStatus && (
+            <div className={`flex items-center gap-2 p-3 rounded-lg ${
+              connectionStatus === 'connected' 
+                ? 'bg-green-50 text-green-700 border border-green-200' 
+                : 'bg-red-50 text-red-700 border border-red-200'
+            }`}>
+              {connectionStatus === 'connected' ? (
+                <>
+                  <CheckCircle2 className="h-5 w-5" />
+                  <span>Successfully connected to backend server</span>
+                </>
+              ) : (
+                <>
+                  <XCircle className="h-5 w-5" />
+                  <span>Failed to connect. Ensure the backend is running and URL is correct.</span>
+                </>
+              )}
+            </div>
+          )}
+
+          <div className="bg-slate-50 p-4 rounded-lg space-y-2">
+            <h4 className="font-medium text-sm">Quick Setup Guide:</h4>
+            <ol className="text-sm text-muted-foreground space-y-1 list-decimal list-inside">
+              <li>Start the backend server: <code className="bg-slate-200 px-1 rounded">python server.py</code></li>
+              <li>Default backend URL: <code className="bg-slate-200 px-1 rounded">http://localhost:8001</code></li>
+              <li>Test the connection before saving</li>
+              <li>Refresh the page after saving to apply changes</li>
+            </ol>
+          </div>
+
+          <Button
+            onClick={handleSave}
+            disabled={saving || !backendUrl}
+            className="w-full"
+            data-testid="save-connection-btn"
+          >
+            {saving ? (
+              <><Loader2 className="h-4 w-4 animate-spin mr-2" />Saving...</>
+            ) : (
+              <><Save className="h-4 w-4 mr-2" />Save Connection Settings</>
+            )}
+          </Button>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
 export default function SettingsPage() {
-  const [activeTab, setActiveTab] = useState('email');
+  const [activeTab, setActiveTab] = useState('connection');
   
   // Email Configuration State
   const [emailConfig, setEmailConfig] = useState({
@@ -613,6 +760,7 @@ export default function SettingsPage() {
       <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-6">
         <ScrollArea className="w-full">
           <TabsList className="inline-flex h-10 w-full justify-start">
+            <TabsTrigger value="connection" className="flex items-center gap-2"><Link className="h-4 w-4" />Connection</TabsTrigger>
             <TabsTrigger value="email" className="flex items-center gap-2"><Mail className="h-4 w-4" />Email</TabsTrigger>
             <TabsTrigger value="snmp" className="flex items-center gap-2"><Network className="h-4 w-4" />SNMP</TabsTrigger>
             <TabsTrigger value="openstack" className="flex items-center gap-2"><Cloud className="h-4 w-4" />OpenStack</TabsTrigger>
@@ -622,6 +770,11 @@ export default function SettingsPage() {
             <TabsTrigger value="backup" className="flex items-center gap-2"><HardDrive className="h-4 w-4" />Backup</TabsTrigger>
           </TabsList>
         </ScrollArea>
+
+        {/* Connection Tab */}
+        <TabsContent value="connection">
+          <ConnectionSettings />
+        </TabsContent>
 
         {/* Email Tab */}
         <TabsContent value="email">
