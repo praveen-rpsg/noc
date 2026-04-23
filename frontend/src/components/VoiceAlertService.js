@@ -141,15 +141,6 @@ export function VoiceAlertProvider({ children }) {
     return englishVoices[0] || voiceList[0];
   };
 
-  // Process alert queue
-  useEffect(() => {
-    if (!isSpeaking && alertQueue.length > 0 && !isMuted) {
-      const [nextAlert, ...rest] = alertQueue;
-      setAlertQueue(rest);
-      speakAlert(nextAlert);
-    }
-  }, [alertQueue, isSpeaking, isMuted]);
-
   // Speak an alert
   const speakAlert = useCallback((alertData) => {
     if (!window.speechSynthesis || isMuted) return;
@@ -174,6 +165,15 @@ export function VoiceAlertProvider({ children }) {
     window.speechSynthesis.speak(utterance);
     setLastAlert(alertData);
   }, [selectedVoice, volume, rate, voiceType, isMuted]);
+
+  // Process alert queue
+  useEffect(() => {
+    if (!isSpeaking && alertQueue.length > 0 && !isMuted) {
+      const [nextAlert, ...rest] = alertQueue;
+      setAlertQueue(rest);
+      speakAlert(nextAlert);
+    }
+  }, [alertQueue, isSpeaking, isMuted, speakAlert]);
 
   // Queue an alert
   const queueAlert = useCallback((message, severity = ALERT_SEVERITY.HIGH, deviceName = null) => {

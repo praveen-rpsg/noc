@@ -66,27 +66,7 @@ export default function NetworkDiagnosticsModal({
   const [routingOptimization, setRoutingOptimization] = useState(null);
   const [routingLoading, setRoutingLoading] = useState(false);
 
-  // Auto-run diagnostics when modal opens with a target
-  useEffect(() => {
-    if (isOpen && defaultTarget) {
-      setTarget(defaultTarget);
-      runPing(defaultTarget);
-      runTraceroute(defaultTarget);
-    }
-  }, [isOpen, defaultTarget]);
-
-  // Auto-refresh ping every 5 seconds if enabled
-  useEffect(() => {
-    let interval;
-    if (autoRefresh && target && !pingLoading) {
-      interval = setInterval(() => {
-        runPing(target, true);
-      }, 5000);
-    }
-    return () => clearInterval(interval);
-  }, [autoRefresh, target, pingLoading]);
-
-  const runPing = async (targetOverride, silent = false) => {
+  const runPing = useCallback(async (targetOverride, silent = false) => {
     const pingTarget = targetOverride || target;
     if (!pingTarget) {
       toast.error('Please enter a target IP or hostname');
@@ -116,9 +96,9 @@ export default function NetworkDiagnosticsModal({
     } finally {
       setPingLoading(false);
     }
-  };
+  }, [deviceId, deviceName, announceNetworkFailure, target]);
 
-  const runTraceroute = async (targetOverride) => {
+  const runTraceroute = useCallback(async (targetOverride) => {
     const traceTarget = targetOverride || target;
     if (!traceTarget) {
       toast.error('Please enter a target IP or hostname');
@@ -142,7 +122,27 @@ export default function NetworkDiagnosticsModal({
     } finally {
       setTracerouteLoading(false);
     }
-  };
+  }, [deviceId, announceTracerouteIssue, target]);
+
+  // Auto-run diagnostics when modal opens with a target
+  useEffect(() => {
+    if (isOpen && defaultTarget) {
+      setTarget(defaultTarget);
+      runPing(defaultTarget);
+      runTraceroute(defaultTarget);
+    }
+  }, [isOpen, defaultTarget, runPing, runTraceroute]);
+
+  // Auto-refresh ping every 5 seconds if enabled
+  useEffect(() => {
+    let interval;
+    if (autoRefresh && target && !pingLoading) {
+      interval = setInterval(() => {
+        runPing(target, true);
+      }, 5000);
+    }
+    return () => clearInterval(interval);
+  }, [autoRefresh, target, pingLoading, runPing]);
 
   const runRoutingOptimization = async () => {
     setRoutingLoading(true);

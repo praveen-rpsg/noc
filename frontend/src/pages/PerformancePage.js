@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
 import { Button } from '../components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
@@ -67,7 +67,7 @@ export default function PerformancePage() {
   const [selectedDevice, setSelectedDevice] = useState('all');
   const [timeRange, setTimeRange] = useState('24');
 
-  const fetchData = async () => {
+  const fetchData = useCallback(async () => {
     try {
       const params = { hours: parseInt(timeRange) };
       if (selectedDevice !== 'all') params.device_id = selectedDevice;
@@ -83,11 +83,11 @@ export default function PerformancePage() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [selectedDevice, timeRange]);
 
   useEffect(() => {
     fetchData();
-  }, [selectedDevice, timeRange]);
+  }, [fetchData]);
 
   // Process metrics for charts
   const chartData = metrics.slice(0, 100).reverse().map((m) => ({
