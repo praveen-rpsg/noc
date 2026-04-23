@@ -334,6 +334,15 @@ Device:
 6. 🟡 Real Office 365 email dispatch for SOS alerts
 7. 🟡 Real SSH connections for device configuration
 
+## Standalone Installation Tested (April 2026)
+- ✅ Login/Registration working
+- ✅ Server Settings dialog on login page for desktop app
+- ✅ Connection Settings tab in Settings page
+- ✅ All useEffect dependency warnings fixed
+- ✅ Production build compiles successfully
+- ✅ 100% backend tests passing (14/14)
+- ✅ All frontend features verified
+
 ## Local Desktop Build Instructions
 To build desktop installers on your local machine:
 ```bash
