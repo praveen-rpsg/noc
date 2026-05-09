@@ -266,8 +266,8 @@ export default function EscalationPage() {
           </CardHeader>
           <CardContent>
             <div className="space-y-3">
-              {escalationsNeeded.map((esc, index) => (
-                <div key={index} className="flex items-center justify-between p-3 bg-white rounded-lg border border-red-200">
+              {escalationsNeeded.map((esc) => (
+                <div key={`${esc.incident.id}-${esc.level.level}`} className="flex items-center justify-between p-3 bg-white rounded-lg border border-red-200">
                   <div>
                     <div className="flex items-center gap-2">
                       <PriorityBadge priority={esc.incident.priority} />

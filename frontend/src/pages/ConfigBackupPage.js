@@ -637,7 +637,7 @@ export default function ConfigBackupPage() {
                   <pre className="text-xs bg-slate-900 p-4 rounded-lg overflow-x-auto font-mono">
                     {diffResult.diff.split('\n').map((line, i) => (
                       <div
-                        key={i}
+                        key={`diff-line-${i}-${line.slice(0, 10)}`}
                         className={
                           line.startsWith('+') ? 'text-green-400' :
                           line.startsWith('-') ? 'text-red-400' :

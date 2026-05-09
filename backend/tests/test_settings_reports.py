@@ -10,9 +10,9 @@ import uuid
 
 BASE_URL = os.environ.get('REACT_APP_BACKEND_URL', 'https://network-ops-ai.preview.emergentagent.com').rstrip('/')
 
-# Test credentials
-TEST_EMAIL = "admin@noc.com"
-TEST_PASSWORD = "admin123"
+# Test credentials from environment variables (secure)
+TEST_EMAIL = os.environ.get('TEST_USER_EMAIL', 'admin@noc.com')
+TEST_PASSWORD = os.environ.get('TEST_USER_PASSWORD', 'admin123')
 
 class TestAuth:
     """Authentication tests to get token for subsequent tests"""

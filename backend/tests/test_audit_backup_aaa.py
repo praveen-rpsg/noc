@@ -10,9 +10,9 @@ from datetime import datetime
 
 BASE_URL = os.environ.get('REACT_APP_BACKEND_URL', '').rstrip('/')
 
-# Test credentials
-ADMIN_EMAIL = "admin@noc.com"
-ADMIN_PASSWORD = "admin123"
+# Test credentials from environment variables (secure)
+ADMIN_EMAIL = os.environ.get('TEST_USER_EMAIL', 'admin@noc.com')
+ADMIN_PASSWORD = os.environ.get('TEST_USER_PASSWORD', 'admin123')
 
 class TestSetup:
     """Setup and authentication tests"""

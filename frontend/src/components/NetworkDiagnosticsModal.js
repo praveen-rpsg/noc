@@ -341,9 +341,9 @@ export default function NetworkDiagnosticsModal({
                     <CardContent className="p-4">
                       <p className="text-sm font-medium mb-3">Ping Results</p>
                       <div className="grid grid-cols-4 gap-2">
-                        {pingResult.ping_results?.map((ping, idx) => (
+                        {pingResult.ping_results?.map((ping) => (
                           <div 
-                            key={idx}
+                            key={`ping-${ping.seq}`}
                             className={`p-3 rounded-lg border text-center ${
                               ping.success ? 'bg-green-50 border-green-200' : 'bg-red-50 border-red-200'
                             }`}
@@ -424,7 +424,7 @@ export default function NetworkDiagnosticsModal({
                           </div>
                           <ul className="text-sm text-amber-700 space-y-1">
                             {tracerouteResult.issues_detected.map((issue, idx) => (
-                              <li key={idx}>• {issue}</li>
+                              <li key={`issue-${idx}-${issue.slice(0, 20)}`}>• {issue}</li>
                             ))}
                           </ul>
                         </CardContent>
@@ -436,10 +436,10 @@ export default function NetworkDiagnosticsModal({
                       <CardContent className="p-4">
                         <p className="text-sm font-medium mb-4">Route Path Visualization</p>
                         <div className="space-y-0">
-                          {tracerouteResult.hops?.map((hop, idx) => (
-                            <div key={idx} className="relative">
+                          {tracerouteResult.hops?.map((hop) => (
+                            <div key={`hop-${hop.hop_number}`} className="relative">
                               {/* Connection Line */}
-                              {idx > 0 && (
+                              {hop.hop_number > 1 && (
                                 <div className="absolute left-5 -top-3 w-0.5 h-6 bg-gradient-to-b from-blue-400 to-blue-600" />
                               )}
                               
@@ -638,7 +638,7 @@ export default function NetworkDiagnosticsModal({
                               <p className="text-xs font-medium mb-1">Challenges:</p>
                               <ul className="text-xs text-muted-foreground space-y-1">
                                 {routingOptimization.optimization.network_assessment.current_challenges.map((c, i) => (
-                                  <li key={i}>• {c}</li>
+                                  <li key={`challenge-${i}-${c.slice(0, 15)}`}>• {c}</li>
                                 ))}
                               </ul>
                             </div>
@@ -653,8 +653,8 @@ export default function NetworkDiagnosticsModal({
                         <CardContent className="p-4">
                           <p className="text-sm font-medium mb-2">Implementation Priority</p>
                           <div className="space-y-2">
-                            {routingOptimization.optimization.implementation_priority.map((item, idx) => (
-                              <div key={idx} className="flex items-center gap-3 p-2 bg-slate-50 rounded">
+                            {routingOptimization.optimization.implementation_priority.map((item) => (
+                              <div key={`priority-${item.priority}-${item.action?.slice(0, 15)}`} className="flex items-center gap-3 p-2 bg-slate-50 rounded">
                                 <div className={`w-8 h-8 rounded-full flex items-center justify-center text-white font-bold ${
                                   item.impact === 'high' ? 'bg-red-500' :
                                   item.impact === 'medium' ? 'bg-amber-500' : 'bg-green-500'

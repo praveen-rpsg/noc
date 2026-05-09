@@ -311,8 +311,8 @@ export default function SSHTerminalPage() {
                   }
                 </div>
               ) : (
-                output.map((entry, index) => (
-                  <div key={index} className="mb-2">
+                output.map((entry) => (
+                  <div key={entry.id || `${entry.timestamp}-${entry.type}`} className="mb-2">
                     <span className="text-slate-500 text-xs">[{entry.timestamp}]</span>
                     {entry.type === 'command' && (
                       <div className="text-green-400">

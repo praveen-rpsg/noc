@@ -890,7 +890,7 @@ export default function IncidentsPage() {
                         <div className="space-y-1 font-mono text-xs">
                           {agentExecution.execution_log?.map((log, idx) => (
                             <div 
-                              key={idx} 
+                              key={log.id || `log-${log.timestamp || idx}`} 
                               className={`
                                 ${log.type === 'error' ? 'text-red-400' : ''}
                                 ${log.type === 'success' ? 'text-green-400' : ''}
@@ -917,8 +917,8 @@ export default function IncidentsPage() {
                   <div>
                     <p className="text-sm font-medium mb-2">Executed Actions ({agentExecution.executed_actions.length})</p>
                     <div className="space-y-2">
-                      {agentExecution.executed_actions.map((action, idx) => (
-                        <div key={idx} className="flex items-center gap-2 text-sm p-2 rounded bg-slate-50">
+                      {agentExecution.executed_actions.map((action) => (
+                        <div key={action.action_id || action.action_type} className="flex items-center gap-2 text-sm p-2 rounded bg-slate-50">
                           {action.success ? (
                             <CheckCircle className="h-4 w-4 text-green-500" />
                           ) : (

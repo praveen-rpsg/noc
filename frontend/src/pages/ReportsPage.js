@@ -153,7 +153,7 @@ export default function ReportsPage() {
               Array.isArray(value) ? (
                 <ul className="list-disc list-inside text-sm space-y-1">
                   {value.map((item, idx) => (
-                    <li key={idx}>{typeof item === 'object' ? JSON.stringify(item) : item}</li>
+                    <li key={typeof item === 'object' && item.id ? item.id : `${key}-item-${idx}`}>{typeof item === 'object' ? JSON.stringify(item) : item}</li>
                   ))}
                 </ul>
               ) : (

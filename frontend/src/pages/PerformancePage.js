@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
 import { Button } from '../components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
@@ -27,6 +27,17 @@ import {
   Bar
 } from 'recharts';
 import { format } from 'date-fns';
+
+// Memoized chart config constants
+const CHART_TICK_STYLE = { fontSize: 12 };
+const CHART_STROKE_COLOR = '#94a3b8';
+const CHART_GRID_STROKE = '#e2e8f0';
+const CHART_Y_DOMAIN = [0, 100];
+const CHART_TOOLTIP_STYLE = { 
+  backgroundColor: '#fff', 
+  border: '1px solid #e2e8f0',
+  borderRadius: '8px',
+};
 
 const MetricCard = ({ title, value, unit, icon: Icon, trend, color = 'blue' }) => {
   const colorClasses = {
@@ -179,16 +190,10 @@ export default function PerformancePage() {
               ) : (
                 <ResponsiveContainer width="100%" height="100%">
                   <AreaChart data={chartData}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
-                    <XAxis dataKey="time" tick={{ fontSize: 12 }} stroke="#94a3b8" />
-                    <YAxis tick={{ fontSize: 12 }} stroke="#94a3b8" domain={[0, 100]} />
-                    <Tooltip 
-                      contentStyle={{ 
-                        backgroundColor: '#fff', 
-                        border: '1px solid #e2e8f0',
-                        borderRadius: '8px',
-                      }} 
-                    />
+                    <CartesianGrid strokeDasharray="3 3" stroke={CHART_GRID_STROKE} />
+                    <XAxis dataKey="time" tick={CHART_TICK_STYLE} stroke={CHART_STROKE_COLOR} />
+                    <YAxis tick={CHART_TICK_STYLE} stroke={CHART_STROKE_COLOR} domain={CHART_Y_DOMAIN} />
+                    <Tooltip contentStyle={CHART_TOOLTIP_STYLE} />
                     <Area 
                       type="monotone" 
                       dataKey="cpu" 
@@ -226,16 +231,10 @@ export default function PerformancePage() {
               ) : (
                 <ResponsiveContainer width="100%" height="100%">
                   <LineChart data={chartData}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
-                    <XAxis dataKey="time" tick={{ fontSize: 12 }} stroke="#94a3b8" />
-                    <YAxis tick={{ fontSize: 12 }} stroke="#94a3b8" domain={[0, 100]} />
-                    <Tooltip 
-                      contentStyle={{ 
-                        backgroundColor: '#fff', 
-                        border: '1px solid #e2e8f0',
-                        borderRadius: '8px',
-                      }} 
-                    />
+                    <CartesianGrid strokeDasharray="3 3" stroke={CHART_GRID_STROKE} />
+                    <XAxis dataKey="time" tick={CHART_TICK_STYLE} stroke={CHART_STROKE_COLOR} />
+                    <YAxis tick={CHART_TICK_STYLE} stroke={CHART_STROKE_COLOR} domain={CHART_Y_DOMAIN} />
+                    <Tooltip contentStyle={CHART_TOOLTIP_STYLE} />
                     <Line 
                       type="monotone" 
                       dataKey="disk" 
@@ -265,16 +264,10 @@ export default function PerformancePage() {
               ) : (
                 <ResponsiveContainer width="100%" height="100%">
                   <BarChart data={chartData}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
-                    <XAxis dataKey="time" tick={{ fontSize: 12 }} stroke="#94a3b8" />
-                    <YAxis tick={{ fontSize: 12 }} stroke="#94a3b8" />
-                    <Tooltip 
-                      contentStyle={{ 
-                        backgroundColor: '#fff', 
-                        border: '1px solid #e2e8f0',
-                        borderRadius: '8px',
-                      }} 
-                    />
+                    <CartesianGrid strokeDasharray="3 3" stroke={CHART_GRID_STROKE} />
+                    <XAxis dataKey="time" tick={CHART_TICK_STYLE} stroke={CHART_STROKE_COLOR} />
+                    <YAxis tick={CHART_TICK_STYLE} stroke={CHART_STROKE_COLOR} />
+                    <Tooltip contentStyle={CHART_TOOLTIP_STYLE} />
                     <Bar dataKey="bandwidth_in" fill="#3b82f6" name="Inbound (Mbps)" />
                     <Bar dataKey="bandwidth_out" fill="#22c55e" name="Outbound (Mbps)" />
                   </BarChart>
@@ -298,16 +291,10 @@ export default function PerformancePage() {
               ) : (
                 <ResponsiveContainer width="100%" height="100%">
                   <LineChart data={chartData}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
-                    <XAxis dataKey="time" tick={{ fontSize: 12 }} stroke="#94a3b8" />
-                    <YAxis tick={{ fontSize: 12 }} stroke="#94a3b8" />
-                    <Tooltip 
-                      contentStyle={{ 
-                        backgroundColor: '#fff', 
-                        border: '1px solid #e2e8f0',
-                        borderRadius: '8px',
-                      }} 
-                    />
+                    <CartesianGrid strokeDasharray="3 3" stroke={CHART_GRID_STROKE} />
+                    <XAxis dataKey="time" tick={CHART_TICK_STYLE} stroke={CHART_STROKE_COLOR} />
+                    <YAxis tick={CHART_TICK_STYLE} stroke={CHART_STROKE_COLOR} />
+                    <Tooltip contentStyle={CHART_TOOLTIP_STYLE} />
                     <Line 
                       type="monotone" 
                       dataKey="latency" 

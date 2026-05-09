@@ -3,17 +3,18 @@ ATECH NOC Commander - Agent Management and Activation System
 """
 
 import uuid
-import random
+import secrets
 import string
 from datetime import datetime, timezone
 from typing import List, Optional
 from pydantic import BaseModel, Field
 
 def generate_activation_code() -> str:
-    """Generate activation code in format ATECH-XXXX-XXXX-XXXX"""
+    """Generate activation code in format ATECH-XXXX-XXXX-XXXX using cryptographically secure random"""
     parts = []
+    alphabet = string.ascii_uppercase + string.digits
     for _ in range(3):
-        part = ''.join(random.choices(string.ascii_uppercase + string.digits, k=4))
+        part = ''.join(secrets.choice(alphabet) for _ in range(4))
         parts.append(part)
     return f"ATECH-{'-'.join(parts)}"
 
