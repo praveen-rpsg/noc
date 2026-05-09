@@ -27,6 +27,12 @@ from agents import (
     ActivationCode, EscalationContact, EscalationContactCreate, ESCALATION_LEVELS
 )
 
+from network_services import (
+    SNMPService, NetworkDiscoveryService, SSHService,
+    OpenStackConnector, OracleDBConnector, VCenterConnector,
+    BackgroundPollingService, DiscoveryMethod, DiscoveredDevice, DiscoveryJob
+)
+
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
 
@@ -4222,6 +4228,506 @@ async def get_activation_codes_stats(current_user: dict = Depends(get_current_us
         "used": used,
         "revoked": revoked
     }
+
+# ===================== NETWORK SERVICES (Discovery, SNMP, SSH) =====================
+
+network_router = APIRouter(prefix="/network", tags=["Network Services"])
+
+# Initialize services
+snmp_service = SNMPService()
+discovery_service = NetworkDiscoveryService()
+ssh_service = SSHService()
+background_polling = None  # Will be initialized on startup
+
+# Store for discovery jobs and pending approvals
+discovery_jobs: Dict[str, DiscoveryJob] = {}
+pending_discovery_requests: Dict[str, Dict] = {}
+
+# Pydantic models for network APIs
+class DiscoveryRequest(BaseModel):
+    subnet: Optional[str] = None  # If None, auto-detect local subnets
+    methods: List[str] = ["arp_scan", "ping_sweep", "snmp_discovery", "port_scan"]
+    snmp_communities: List[str] = ["public"]
+
+class DiscoveryApproval(BaseModel):
+    request_id: str
+    approved: bool
+    reason: Optional[str] = None
+
+class SSHConnectRequest(BaseModel):
+    host: str
+    username: str
+    password: str
+    port: int = 22
+
+class SSHCommandRequest(BaseModel):
+    session_id: str
+    command: str
+    timeout: int = 30
+
+class SNMPPollRequest(BaseModel):
+    ip_address: str
+    community: str = "public"
+    oids: Optional[List[str]] = None
+
+class CloudConnectRequest(BaseModel):
+    config_id: str  # ID of stored configuration
+
+@network_router.get("/subnets")
+async def get_local_subnets(current_user: dict = Depends(get_current_user)):
+    """Get all local network subnets"""
+    subnets = discovery_service.get_local_subnets()
+    return {"subnets": subnets}
+
+@network_router.post("/discovery/request")
+async def request_network_discovery(
+    request: DiscoveryRequest,
+    current_user: dict = Depends(get_current_user)
+):
+    """Request a network discovery scan (requires admin approval)"""
+    request_id = str(uuid.uuid4())
+    
+    # Get subnet
+    subnet = request.subnet
+    if not subnet:
+        subnets = discovery_service.get_local_subnets()
+        subnet = subnets[0] if subnets else "192.168.1.0/24"
+    
+    # Create pending request
+    pending_discovery_requests[request_id] = {
+        "id": request_id,
+        "subnet": subnet,
+        "methods": request.methods,
+        "snmp_communities": request.snmp_communities,
+        "requested_by": current_user.get("email"),
+        "requested_at": datetime.now(timezone.utc).isoformat(),
+        "status": "pending_approval"
+    }
+    
+    return {
+        "request_id": request_id,
+        "message": "Discovery request submitted. Awaiting admin approval.",
+        "subnet": subnet,
+        "methods": request.methods
+    }
+
+@network_router.get("/discovery/pending")
+async def get_pending_discovery_requests(current_user: dict = Depends(get_current_user)):
+    """Get all pending discovery requests (Admin only)"""
+    if current_user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required")
+    
+    return list(pending_discovery_requests.values())
+
+@network_router.post("/discovery/approve")
+async def approve_discovery_request(
+    approval: DiscoveryApproval,
+    current_user: dict = Depends(get_current_user)
+):
+    """Approve or reject a discovery request (Admin only)"""
+    if current_user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required")
+    
+    if approval.request_id not in pending_discovery_requests:
+        raise HTTPException(status_code=404, detail="Request not found")
+    
+    request_data = pending_discovery_requests[approval.request_id]
+    
+    if not approval.approved:
+        request_data["status"] = "rejected"
+        request_data["rejected_by"] = current_user.get("email")
+        request_data["rejected_at"] = datetime.now(timezone.utc).isoformat()
+        request_data["rejection_reason"] = approval.reason
+        del pending_discovery_requests[approval.request_id]
+        return {"message": "Discovery request rejected", "request_id": approval.request_id}
+    
+    # Create and start discovery job
+    job_id = str(uuid.uuid4())
+    job = DiscoveryJob(
+        id=job_id,
+        status="running",
+        methods=request_data["methods"],
+        subnet=request_data["subnet"],
+        started_at=datetime.now(timezone.utc).isoformat(),
+        approved_by=current_user.get("email"),
+        approved_at=datetime.now(timezone.utc).isoformat()
+    )
+    discovery_jobs[job_id] = job
+    
+    # Remove from pending
+    del pending_discovery_requests[approval.request_id]
+    
+    # Run discovery in background
+    asyncio.create_task(_run_discovery_job(job_id, request_data["snmp_communities"]))
+    
+    return {
+        "message": "Discovery approved and started",
+        "job_id": job_id,
+        "subnet": job.subnet
+    }
+
+async def _run_discovery_job(job_id: str, communities: List[str]):
+    """Background task to run discovery"""
+    job = discovery_jobs.get(job_id)
+    if not job:
+        return
+    
+    try:
+        def update_progress(progress):
+            job.progress = progress
+        
+        devices = await discovery_service.run_discovery(job, communities, update_progress)
+        
+        # Store discovered devices
+        now = datetime.now(timezone.utc).isoformat()
+        for device in devices:
+            device_dict = {
+                "id": str(uuid.uuid4()),
+                "ip_address": device.ip_address,
+                "mac_address": device.mac_address,
+                "hostname": device.hostname or f"device-{device.ip_address.replace('.', '-')}",
+                "device_type": device.device_type or "unknown",
+                "vendor": device.vendor,
+                "discovery_method": device.discovery_method,
+                "snmp_info": device.snmp_info,
+                "open_ports": device.open_ports,
+                "status": "online",
+                "discovered_at": device.discovered_at,
+                "auto_discovered": True,
+                "created_at": now
+            }
+            
+            # Check if device already exists (by IP or MAC)
+            existing = await db.devices.find_one({
+                "$or": [
+                    {"ip_address": device.ip_address},
+                    {"mac_address": device.mac_address} if device.mac_address else {"ip_address": device.ip_address}
+                ]
+            })
+            
+            if existing:
+                # Update existing device
+                await db.devices.update_one(
+                    {"_id": existing["_id"]},
+                    {"$set": {
+                        "status": "online",
+                        "last_seen": now,
+                        "snmp_info": device.snmp_info,
+                        "open_ports": device.open_ports
+                    }}
+                )
+            else:
+                # Insert new device
+                await db.devices.insert_one(device_dict)
+        
+        job.status = "completed"
+        job.completed_at = datetime.now(timezone.utc).isoformat()
+        job.devices_found = len(devices)
+        job.progress = 100
+        
+    except Exception as e:
+        job.status = "failed"
+        job.error = str(e)
+        job.completed_at = datetime.now(timezone.utc).isoformat()
+
+@network_router.get("/discovery/jobs")
+async def get_discovery_jobs(current_user: dict = Depends(get_current_user)):
+    """Get all discovery jobs"""
+    jobs = []
+    for job in discovery_jobs.values():
+        jobs.append({
+            "id": job.id,
+            "status": job.status,
+            "methods": job.methods,
+            "subnet": job.subnet,
+            "started_at": job.started_at,
+            "completed_at": job.completed_at,
+            "devices_found": job.devices_found,
+            "progress": job.progress,
+            "error": job.error,
+            "approved_by": job.approved_by
+        })
+    return sorted(jobs, key=lambda x: x.get("started_at", ""), reverse=True)
+
+@network_router.get("/discovery/jobs/{job_id}")
+async def get_discovery_job(job_id: str, current_user: dict = Depends(get_current_user)):
+    """Get specific discovery job"""
+    if job_id not in discovery_jobs:
+        raise HTTPException(status_code=404, detail="Job not found")
+    
+    job = discovery_jobs[job_id]
+    return {
+        "id": job.id,
+        "status": job.status,
+        "methods": job.methods,
+        "subnet": job.subnet,
+        "started_at": job.started_at,
+        "completed_at": job.completed_at,
+        "devices_found": job.devices_found,
+        "progress": job.progress,
+        "error": job.error,
+        "approved_by": job.approved_by
+    }
+
+# SNMP Endpoints
+@network_router.post("/snmp/poll")
+async def poll_device_snmp(
+    request: SNMPPollRequest,
+    current_user: dict = Depends(get_current_user)
+):
+    """Poll a device using SNMP"""
+    result = await snmp_service.poll_device(
+        request.ip_address,
+        request.community,
+        request.oids
+    )
+    return result
+
+@network_router.post("/snmp/get-info")
+async def get_device_snmp_info(
+    request: SNMPPollRequest,
+    current_user: dict = Depends(get_current_user)
+):
+    """Get comprehensive device info via SNMP"""
+    info = await snmp_service.get_device_info(request.ip_address, request.community)
+    return info
+
+@network_router.post("/snmp/walk")
+async def snmp_walk_device(
+    ip_address: str,
+    oid: str,
+    community: str = "public",
+    current_user: dict = Depends(get_current_user)
+):
+    """Perform SNMP walk on a device"""
+    results = await snmp_service.snmp_walk(ip_address, community, oid)
+    return {"results": [{"oid": r.oid, "value": r.value, "type": r.value_type} for r in results]}
+
+# SSH Endpoints
+@network_router.post("/ssh/connect")
+async def ssh_connect(
+    request: SSHConnectRequest,
+    current_user: dict = Depends(get_current_user)
+):
+    """Establish SSH connection to a device"""
+    success, message, session_id = await ssh_service.connect(
+        request.host,
+        request.username,
+        request.password,
+        request.port
+    )
+    
+    if not success:
+        raise HTTPException(status_code=400, detail=message)
+    
+    # Log the connection
+    await db.ssh_sessions.insert_one({
+        "session_id": session_id,
+        "host": request.host,
+        "username": request.username,
+        "connected_by": current_user.get("email"),
+        "connected_at": datetime.now(timezone.utc).isoformat(),
+        "status": "active"
+    })
+    
+    return {"success": True, "session_id": session_id, "message": message}
+
+@network_router.post("/ssh/execute")
+async def ssh_execute_command(
+    request: SSHCommandRequest,
+    current_user: dict = Depends(get_current_user)
+):
+    """Execute command on SSH session"""
+    success, output, error = await ssh_service.execute_command(
+        request.session_id,
+        request.command,
+        request.timeout
+    )
+    
+    # Log the command
+    await db.ssh_command_log.insert_one({
+        "session_id": request.session_id,
+        "command": request.command,
+        "executed_by": current_user.get("email"),
+        "executed_at": datetime.now(timezone.utc).isoformat(),
+        "success": success,
+        "output_length": len(output) if output else 0
+    })
+    
+    return {"success": success, "output": output, "error": error}
+
+@network_router.post("/ssh/disconnect")
+async def ssh_disconnect(
+    session_id: str,
+    current_user: dict = Depends(get_current_user)
+):
+    """Close SSH session"""
+    success = await ssh_service.disconnect(session_id)
+    
+    if success:
+        await db.ssh_sessions.update_one(
+            {"session_id": session_id},
+            {"$set": {"status": "closed", "disconnected_at": datetime.now(timezone.utc).isoformat()}}
+        )
+    
+    return {"success": success}
+
+@network_router.post("/ssh/get-config")
+async def ssh_get_device_config(
+    host: str,
+    username: str,
+    password: str,
+    device_type: str = "cisco",
+    current_user: dict = Depends(get_current_user)
+):
+    """Get device configuration via SSH"""
+    success, config = await ssh_service.get_device_config(host, username, password, device_type)
+    
+    if not success:
+        raise HTTPException(status_code=400, detail=config)
+    
+    return {"success": True, "config": config}
+
+# Cloud Connector Endpoints
+@network_router.post("/openstack/connect")
+async def connect_openstack(
+    request: CloudConnectRequest,
+    current_user: dict = Depends(get_current_user)
+):
+    """Connect to OpenStack using stored configuration"""
+    config = await db.settings_openstack.find_one({"id": request.config_id})
+    if not config:
+        raise HTTPException(status_code=404, detail="OpenStack configuration not found")
+    
+    connector = OpenStackConnector(
+        auth_url=config.get("auth_url"),
+        username=config.get("username"),
+        password=config.get("password"),
+        project_name=config.get("project_name"),
+        domain=config.get("domain", "default")
+    )
+    
+    success, message = await connector.connect()
+    if not success:
+        raise HTTPException(status_code=400, detail=message)
+    
+    # Get data
+    servers = await connector.get_servers()
+    networks = await connector.get_networks()
+    
+    return {
+        "success": True,
+        "message": message,
+        "servers": servers,
+        "networks": networks
+    }
+
+@network_router.post("/oracle/connect")
+async def connect_oracle(
+    request: CloudConnectRequest,
+    current_user: dict = Depends(get_current_user)
+):
+    """Connect to Oracle DB using stored configuration"""
+    config = await db.settings_oracle.find_one({"id": request.config_id})
+    if not config:
+        raise HTTPException(status_code=404, detail="Oracle configuration not found")
+    
+    connector = OracleDBConnector(
+        host=config.get("host"),
+        port=config.get("port", 1521),
+        service_name=config.get("service_name"),
+        username=config.get("username"),
+        password=config.get("password")
+    )
+    
+    success, message = await connector.connect()
+    if not success:
+        raise HTTPException(status_code=400, detail=message)
+    
+    # Get data
+    instance_info = await connector.get_instance_info()
+    tablespaces = await connector.get_tablespace_usage()
+    
+    return {
+        "success": True,
+        "message": message,
+        "instance_info": instance_info,
+        "tablespaces": tablespaces
+    }
+
+@network_router.post("/vcenter/connect")
+async def connect_vcenter(
+    request: CloudConnectRequest,
+    current_user: dict = Depends(get_current_user)
+):
+    """Connect to vCenter using stored configuration"""
+    config = await db.settings_vcenter.find_one({"id": request.config_id})
+    if not config:
+        raise HTTPException(status_code=404, detail="vCenter configuration not found")
+    
+    connector = VCenterConnector(
+        host=config.get("host"),
+        username=config.get("username"),
+        password=config.get("password"),
+        port=config.get("port", 443)
+    )
+    
+    success, message = await connector.connect()
+    if not success:
+        raise HTTPException(status_code=400, detail=message)
+    
+    # Get data
+    vms = await connector.get_vms()
+    hosts = await connector.get_hosts()
+    
+    return {
+        "success": True,
+        "message": message,
+        "virtual_machines": vms,
+        "esxi_hosts": hosts
+    }
+
+# Background polling control
+@network_router.post("/polling/start")
+async def start_background_polling(current_user: dict = Depends(get_current_user)):
+    """Start background SNMP polling (Admin only)"""
+    if current_user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required")
+    
+    global background_polling
+    if background_polling and background_polling.running:
+        return {"message": "Polling is already running"}
+    
+    background_polling = BackgroundPollingService(db, poll_interval=30)
+    asyncio.create_task(background_polling.start())
+    
+    return {"message": "Background polling started", "interval": 30}
+
+@network_router.post("/polling/stop")
+async def stop_background_polling(current_user: dict = Depends(get_current_user)):
+    """Stop background SNMP polling (Admin only)"""
+    if current_user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required")
+    
+    global background_polling
+    if background_polling:
+        background_polling.stop()
+        return {"message": "Background polling stopped"}
+    
+    return {"message": "Polling was not running"}
+
+@network_router.get("/polling/status")
+async def get_polling_status(current_user: dict = Depends(get_current_user)):
+    """Get background polling status"""
+    global background_polling
+    running = background_polling.running if background_polling else False
+    return {
+        "running": running,
+        "interval": 30 if running else None
+    }
+
+# Include network router
+api_router.include_router(network_router)
 
 # ===================== AI INCIDENT RESOLUTION =====================
 @ai_router.post("/incidents/{incident_id}/analyze")

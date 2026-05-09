@@ -286,6 +286,45 @@ A comprehensive NOC (Network Operation Center) tool where AI agents act as NOC e
 - `PUT /api/settings/activation-codes/{id}/revoke` - Revoke code (admin)
 - `GET /api/settings/activation-codes/stats` - Get statistics (admin)
 
+### Phase 11 - Real Network Services (2026-05-09)
+
+#### 1. Network Discovery System
+- ✅ **Multi-Method Discovery**: ARP Scan, Ping Sweep, SNMP Discovery, Port Scan
+- ✅ **Admin Approval Workflow**: Scans require admin approval before execution
+- ✅ **Auto Subnet Detection**: Automatically detects local network subnets
+- ✅ **Device Auto-Registration**: Discovered devices automatically added to DB
+- ✅ **Discovery Jobs**: Track progress and history of discovery scans
+
+#### 2. Real SNMP Polling
+- ✅ **pysnmp Integration**: Real SNMP GET/WALK operations
+- ✅ **Background Polling**: Continuous polling every 30 seconds
+- ✅ **Device Status Updates**: Automatic online/offline detection
+- ✅ **Metrics Collection**: Store SNMP metrics in database
+
+#### 3. Real SSH Connections
+- ✅ **paramiko Integration**: Real SSH connections to devices
+- ✅ **Credential Prompt**: User enters credentials per session
+- ✅ **Command Execution**: Execute commands and get output
+- ✅ **Session Management**: Connect/disconnect/logging
+- ✅ **Config Retrieval**: Get device configurations via SSH
+
+#### 4. Cloud Connectors (Strict Mode)
+- ✅ **OpenStack**: Real API connections (servers, networks)
+- ✅ **Oracle DB**: Real database connections (instance info, tablespaces)
+- ✅ **vCenter**: Real VMware connections (VMs, ESXi hosts)
+- ✅ **Strict Mode**: Fails if credentials invalid (no mocking)
+
+#### 5. Network Services API Endpoints
+- `GET /api/network/subnets` - Get local network subnets
+- `POST /api/network/discovery/request` - Request discovery scan
+- `GET /api/network/discovery/pending` - Get pending requests (admin)
+- `POST /api/network/discovery/approve` - Approve/reject request (admin)
+- `GET /api/network/discovery/jobs` - Get all discovery jobs
+- `POST /api/network/snmp/poll` - Poll device via SNMP
+- `POST /api/network/ssh/connect` - Establish SSH connection
+- `POST /api/network/ssh/execute` - Execute SSH command
+- `POST /api/network/polling/start|stop` - Control background polling
+
 ## New Settings Tabs (Phase 6, 9 & 10)
 | Tab | Purpose |
 |-----|---------|
@@ -353,13 +392,14 @@ Device:
 ```
 
 ## Pending/Future Items
-1. 🟡 Implement actual SNMP polling with pysnmp
-2. 🟡 Connect to real OpenStack/Oracle/vCenter APIs
-3. 🟡 Build drag-drop dashboard editor UI
-4. 🟡 Mobile responsive design
-5. 🟡 Audit logging
-6. 🟡 Real Office 365 email dispatch for SOS alerts
-7. 🟡 Real SSH connections for device configuration
+1. 🟢 ~~Implement actual SNMP polling with pysnmp~~ DONE
+2. 🟢 ~~Connect to real OpenStack/Oracle/vCenter APIs~~ DONE
+3. 🟢 ~~Implement real SSH connections for device configuration~~ DONE
+4. 🟢 ~~Real-time device discovery on network~~ DONE
+5. 🟡 Build drag-drop dashboard editor UI
+6. 🟡 Mobile responsive design
+7. 🟡 Audit logging
+8. 🟡 Real Office 365 email dispatch for SOS alerts
 
 ## Standalone Installation Tested (April 2026)
 - ✅ Login/Registration working

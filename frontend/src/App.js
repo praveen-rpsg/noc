@@ -24,6 +24,7 @@ import SLAPage from "./pages/SLAPage";
 import AgentsPage from "./pages/AgentsPage";
 import EscalationPage from "./pages/EscalationPage";
 import SettingsPage from "./pages/SettingsPage";
+import NetworkDiscoveryPage from "./pages/NetworkDiscoveryPage";
 
 // License check hook
 const useLicenseStatus = () => {
@@ -228,6 +229,14 @@ function AppRoutes() {
         element={
           <ProtectedRoute>
             <SettingsPage />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/network-discovery"
+        element={
+          <ProtectedRoute>
+            <NetworkDiscoveryPage />
           </ProtectedRoute>
         }
       />
