@@ -521,7 +521,7 @@ function LicenseSettings() {
 export default function SettingsPage() {
   const [activeTab, setActiveTab] = useState('connection');
   
-  // Email Configuration State
+  // Email Configuration State (SMTP)
   const [emailConfig, setEmailConfig] = useState({
     smtp_server: 'smtp.office365.com',
     smtp_port: 587,
@@ -534,6 +534,19 @@ export default function SettingsPage() {
   const [emailLoading, setEmailLoading] = useState(false);
   const [testEmail, setTestEmail] = useState('');
   const [showPassword, setShowPassword] = useState({});
+  
+  // Office 365 MS Graph Configuration State
+  const [o365Config, setO365Config] = useState({
+    tenant_id: '',
+    client_id: '',
+    client_secret: '',
+    sender_email: '',
+    sender_name: 'ATECH NOC Commander',
+    is_active: true
+  });
+  const [o365Loading, setO365Loading] = useState(false);
+  const [o365Testing, setO365Testing] = useState(false);
+  const [showO365Secret, setShowO365Secret] = useState(false);
 
   // Use hooks for different config types
   const snmpCommunity = useSettingsConfig('snmp/community');
@@ -591,6 +604,71 @@ export default function SettingsPage() {
       toast.success('Test email sent successfully');
     } catch (error) {
       toast.error(error.response?.data?.detail || 'Failed to send test email');
+    }
+  };
+
+  // Fetch O365 Configuration
+  useEffect(() => {
+    const fetchO365Config = async () => {
+      try {
+        const response = await axios.get(`${API}/settings/o365`, { headers: getAuthHeader() });
+        if (response.data && Object.keys(response.data).length > 0) {
+          setO365Config(prev => ({ ...prev, ...response.data, client_secret: '' }));
+        }
+      } catch (error) {}
+    };
+    fetchO365Config();
+  }, []);
+
+  // Save O365 Configuration
+  const handleSaveO365Config = async () => {
+    if (!o365Config.tenant_id || !o365Config.client_id || !o365Config.sender_email) {
+      toast.error('Tenant ID, Client ID, and Sender Email are required');
+      return;
+    }
+    setO365Loading(true);
+    try {
+      await axios.post(`${API}/settings/o365`, o365Config, { headers: getAuthHeader() });
+      toast.success('Office 365 configuration saved successfully');
+    } catch (error) {
+      toast.error(error.response?.data?.detail || 'Failed to save O365 configuration');
+    } finally {
+      setO365Loading(false);
+    }
+  };
+
+  // Test O365 Email
+  const handleTestO365 = async () => {
+    setO365Testing(true);
+    try {
+      const response = await axios.post(`${API}/settings/o365/test`, {}, { headers: getAuthHeader() });
+      if (response.data.success) {
+        toast.success(`Test email sent via ${response.data.method || 'O365'}`);
+      } else {
+        toast.error(response.data.error || 'Failed to send test email');
+      }
+    } catch (error) {
+      toast.error(error.response?.data?.detail || 'Failed to send test email');
+    } finally {
+      setO365Testing(false);
+    }
+  };
+
+  // Delete O365 Configuration
+  const handleDeleteO365Config = async () => {
+    try {
+      await axios.delete(`${API}/settings/o365`, { headers: getAuthHeader() });
+      setO365Config({
+        tenant_id: '',
+        client_id: '',
+        client_secret: '',
+        sender_email: '',
+        sender_name: 'ATECH NOC Commander',
+        is_active: true
+      });
+      toast.success('Office 365 configuration deleted');
+    } catch (error) {
+      toast.error('Failed to delete O365 configuration');
     }
   };
 
@@ -1072,55 +1150,161 @@ export default function SettingsPage() {
 
         {/* Email Tab */}
         <TabsContent value="email">
-          <Card className="bg-white border-border/50">
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2"><Mail className="h-5 w-5 text-blue-600" />Office 365 Email Configuration</CardTitle>
-              <CardDescription>Configure SMTP settings for email notifications and escalation alerts</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-6">
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                <div className="space-y-2">
-                  <Label>SMTP Server</Label>
-                  <Input value={emailConfig.smtp_server} onChange={(e) => setEmailConfig({...emailConfig, smtp_server: e.target.value})} placeholder="smtp.office365.com" />
+          <div className="space-y-6">
+            {/* MS Graph Configuration (Recommended) */}
+            <Card className="bg-white border-border/50">
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <Cloud className="h-5 w-5 text-blue-600" />
+                  Microsoft Graph API (Recommended)
+                  {o365Config.tenant_id && <Badge className="ml-2 bg-green-100 text-green-700">Configured</Badge>}
+                </CardTitle>
+                <CardDescription>
+                  Use Azure AD application for secure email sending via Microsoft Graph API.
+                  <a href="https://portal.azure.com/#blade/Microsoft_AAD_RegisteredApps/ApplicationsListBlade" target="_blank" rel="noopener noreferrer" className="ml-1 text-blue-600 hover:underline">
+                    Get credentials from Azure Portal →
+                  </a>
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-6">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                  <div className="space-y-2">
+                    <Label>Tenant ID *</Label>
+                    <Input 
+                      value={o365Config.tenant_id} 
+                      onChange={(e) => setO365Config({...o365Config, tenant_id: e.target.value})} 
+                      placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Client ID *</Label>
+                    <Input 
+                      value={o365Config.client_id} 
+                      onChange={(e) => setO365Config({...o365Config, client_id: e.target.value})} 
+                      placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Client Secret *</Label>
+                    <div className="relative">
+                      <Input 
+                        type={showO365Secret ? 'text' : 'password'}
+                        value={o365Config.client_secret} 
+                        onChange={(e) => setO365Config({...o365Config, client_secret: e.target.value})} 
+                        placeholder={o365Config.tenant_id ? '***' : 'Enter client secret'}
+                      />
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        className="absolute right-0 top-0 h-full"
+                        onClick={() => setShowO365Secret(!showO365Secret)}
+                      >
+                        {showO365Secret ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                      </Button>
+                    </div>
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Sender Email *</Label>
+                    <Input 
+                      value={o365Config.sender_email} 
+                      onChange={(e) => setO365Config({...o365Config, sender_email: e.target.value})} 
+                      placeholder="noc-alerts@yourcompany.onmicrosoft.com"
+                    />
+                    <p className="text-xs text-muted-foreground">Must be a valid mailbox in your Azure AD</p>
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Sender Name</Label>
+                    <Input 
+                      value={o365Config.sender_name} 
+                      onChange={(e) => setO365Config({...o365Config, sender_name: e.target.value})} 
+                    />
+                  </div>
+                  <div className="flex items-center gap-2 pt-6">
+                    <Switch 
+                      checked={o365Config.is_active} 
+                      onCheckedChange={(c) => setO365Config({...o365Config, is_active: c})} 
+                    />
+                    <Label>Active</Label>
+                  </div>
                 </div>
-                <div className="space-y-2">
-                  <Label>SMTP Port</Label>
-                  <Input type="number" value={emailConfig.smtp_port} onChange={(e) => setEmailConfig({...emailConfig, smtp_port: parseInt(e.target.value)})} />
+                <div className="border-t pt-6 flex items-center justify-between">
+                  <div className="text-sm text-muted-foreground">
+                    Required permissions: <code className="bg-slate-100 px-1 rounded">Mail.Send</code>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {o365Config.tenant_id && (
+                      <Button variant="outline" onClick={handleDeleteO365Config} className="text-red-500 hover:text-red-700">
+                        <Trash2 className="h-4 w-4 mr-2" />Delete
+                      </Button>
+                    )}
+                    <Button variant="outline" onClick={handleTestO365} disabled={o365Testing || !o365Config.tenant_id}>
+                      {o365Testing ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <TestTube className="h-4 w-4 mr-2" />}
+                      Send Test
+                    </Button>
+                    <Button onClick={handleSaveO365Config} disabled={o365Loading}>
+                      {o365Loading ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <Save className="h-4 w-4 mr-2" />}
+                      Save
+                    </Button>
+                  </div>
                 </div>
-                <div className="space-y-2">
-                  <Label>Username (Email)</Label>
-                  <Input value={emailConfig.username} onChange={(e) => setEmailConfig({...emailConfig, username: e.target.value})} placeholder="noc@company.com" />
+              </CardContent>
+            </Card>
+
+            {/* SMTP Fallback Configuration */}
+            <Card className="bg-white border-border/50">
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <Mail className="h-5 w-5 text-orange-600" />
+                  SMTP Configuration (Fallback)
+                </CardTitle>
+                <CardDescription>Configure SMTP settings as a fallback for email notifications</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-6">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                  <div className="space-y-2">
+                    <Label>SMTP Server</Label>
+                    <Input value={emailConfig.smtp_server} onChange={(e) => setEmailConfig({...emailConfig, smtp_server: e.target.value})} placeholder="smtp.office365.com" />
+                  </div>
+                  <div className="space-y-2">
+                    <Label>SMTP Port</Label>
+                    <Input type="number" value={emailConfig.smtp_port} onChange={(e) => setEmailConfig({...emailConfig, smtp_port: parseInt(e.target.value)})} />
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Username (Email)</Label>
+                    <Input value={emailConfig.username} onChange={(e) => setEmailConfig({...emailConfig, username: e.target.value})} placeholder="noc@company.com" />
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Password</Label>
+                    <Input type="password" value={emailConfig.password} onChange={(e) => setEmailConfig({...emailConfig, password: e.target.value})} placeholder="App password" />
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Sender Email</Label>
+                    <Input value={emailConfig.sender_email} onChange={(e) => setEmailConfig({...emailConfig, sender_email: e.target.value})} placeholder="noc-alerts@company.com" />
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Sender Name</Label>
+                    <Input value={emailConfig.sender_name} onChange={(e) => setEmailConfig({...emailConfig, sender_name: e.target.value})} />
+                  </div>
                 </div>
-                <div className="space-y-2">
-                  <Label>Password</Label>
-                  <Input type="password" value={emailConfig.password} onChange={(e) => setEmailConfig({...emailConfig, password: e.target.value})} placeholder="App password" />
+                <div className="flex items-center gap-2">
+                  <Switch checked={emailConfig.use_tls} onCheckedChange={(c) => setEmailConfig({...emailConfig, use_tls: c})} />
+                  <Label>Use TLS Encryption</Label>
                 </div>
-                <div className="space-y-2">
-                  <Label>Sender Email</Label>
-                  <Input value={emailConfig.sender_email} onChange={(e) => setEmailConfig({...emailConfig, sender_email: e.target.value})} placeholder="noc-alerts@company.com" />
+                <div className="border-t pt-6 flex items-end gap-4">
+                  <div className="flex-1">
+                    <Label className="mb-2 block">Test Email</Label>
+                    <Input value={testEmail} onChange={(e) => setTestEmail(e.target.value)} placeholder="Enter email to test" />
+                  </div>
+                  <Button variant="outline" onClick={handleTestEmail}><TestTube className="h-4 w-4 mr-2" />Send Test</Button>
+                  <Button onClick={handleSaveEmailConfig} disabled={emailLoading}>
+                    {emailLoading ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <Save className="h-4 w-4 mr-2" />}
+                    Save Configuration
+                  </Button>
                 </div>
-                <div className="space-y-2">
-                  <Label>Sender Name</Label>
-                  <Input value={emailConfig.sender_name} onChange={(e) => setEmailConfig({...emailConfig, sender_name: e.target.value})} />
-                </div>
-              </div>
-              <div className="flex items-center gap-2">
-                <Switch checked={emailConfig.use_tls} onCheckedChange={(c) => setEmailConfig({...emailConfig, use_tls: c})} />
-                <Label>Use TLS Encryption</Label>
-              </div>
-              <div className="border-t pt-6 flex items-end gap-4">
-                <div className="flex-1">
-                  <Label className="mb-2 block">Test Email</Label>
-                  <Input value={testEmail} onChange={(e) => setTestEmail(e.target.value)} placeholder="Enter email to test" />
-                </div>
-                <Button variant="outline" onClick={handleTestEmail}><TestTube className="h-4 w-4 mr-2" />Send Test</Button>
-                <Button onClick={handleSaveEmailConfig} disabled={emailLoading}>
-                  {emailLoading ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <Save className="h-4 w-4 mr-2" />}
-                  Save Configuration
-                </Button>
-              </div>
-            </CardContent>
-          </Card>
+              </CardContent>
+            </Card>
+          </div>
         </TabsContent>
 
         {/* SNMP Tab */}

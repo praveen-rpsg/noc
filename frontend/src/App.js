@@ -11,6 +11,8 @@ import { getBackendUrlSync, initConfig } from "./services/config";
 import LoginPage from "./pages/LoginPage";
 import ActivationPage from "./pages/ActivationPage";
 import DashboardPage from "./pages/DashboardPage";
+import DashboardEditorPage from "./pages/DashboardEditorPage";
+import UserManagementPage from "./pages/UserManagementPage";
 import MonitoringPage from "./pages/MonitoringPage";
 import TopologyPage from "./pages/TopologyPage";
 import AlertsPage from "./pages/AlertsPage";
@@ -237,6 +239,22 @@ function AppRoutes() {
         element={
           <ProtectedRoute>
             <NetworkDiscoveryPage />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/dashboard-editor"
+        element={
+          <ProtectedRoute>
+            <DashboardEditorPage />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/user-management"
+        element={
+          <ProtectedRoute>
+            <UserManagementPage />
           </ProtectedRoute>
         }
       />

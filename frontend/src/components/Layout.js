@@ -25,13 +25,16 @@ import {
   Bot,
   AlertCircle,
   Cog,
-  Search
+  Search,
+  LayoutGrid,
+  Users
 } from 'lucide-react';
 
 const AMEYA_LOGO_URL = "https://customer-assets.emergentagent.com/job_network-ops-ai/artifacts/vjap12f5_Atechlogo.jpeg";
 
 const navItems = [
   { path: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
+  { path: '/dashboard-editor', label: 'Dashboard Editor', icon: LayoutGrid },
   { path: '/monitoring', label: 'Monitoring', icon: Monitor },
   { path: '/topology', label: 'Network Topology', icon: Network },
   { path: '/network-discovery', label: 'Network Discovery', icon: Search },
@@ -45,6 +48,7 @@ const navItems = [
   { path: '/reports', label: 'Reports', icon: FileText },
   { path: '/configuration', label: 'Configuration', icon: Settings },
   { path: '/sla', label: 'SLA Management', icon: Target },
+  { path: '/user-management', label: 'User Management', icon: Users, adminOnly: true },
   { path: '/settings', label: 'Settings', icon: Cog },
 ];
 
@@ -97,7 +101,9 @@ export const Sidebar = ({ notificationCount = 0 }) => {
         {/* Navigation */}
         <ScrollArea className="flex-1 py-4">
           <nav className="space-y-1 px-2">
-            {navItems.map((item) => {
+            {navItems
+              .filter(item => !item.adminOnly || user?.role === 'admin')
+              .map((item) => {
               const Icon = item.icon;
               const isActive = location.pathname === item.path;
               const showBadge = item.path === '/alerts' && notificationCount > 0;

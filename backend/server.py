@@ -2812,6 +2812,378 @@ async def get_recent_incidents(limit: int = 10, current_user: dict = Depends(get
     incidents = await db.incidents.find({}, {"_id": 0}).sort("created_at", -1).to_list(limit)
     return [serialize_doc(i) for i in incidents]
 
+@dashboard_router.get("/layout")
+async def get_dashboard_layout(current_user: dict = Depends(get_current_user)):
+    """Get user's dashboard layout or global layout"""
+    # Try user-specific layout first
+    user_layout = await db.dashboard_layouts.find_one(
+        {"user_id": current_user["id"]}, 
+        {"_id": 0}
+    )
+    if user_layout:
+        return user_layout
+    
+    # Fall back to global layout
+    global_layout = await db.dashboard_layouts.find_one(
+        {"is_global": True}, 
+        {"_id": 0}
+    )
+    if global_layout:
+        return global_layout
+    
+    # Return empty layout if none exists
+    return {"layout": None, "widget_configs": {}, "is_global": False}
+
+@dashboard_router.post("/layout")
+async def save_dashboard_layout(
+    data: dict,
+    current_user: dict = Depends(get_current_user)
+):
+    """Save dashboard layout"""
+    layout = data.get("layout", [])
+    widget_configs = data.get("widget_configs", {})
+    is_global = data.get("is_global", False)
+    
+    # Only admins can save global layouts
+    if is_global and current_user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Only admins can save global layouts")
+    
+    now = datetime.now(timezone.utc).isoformat()
+    
+    if is_global:
+        # Update or create global layout
+        await db.dashboard_layouts.update_one(
+            {"is_global": True},
+            {"$set": {
+                "layout": layout,
+                "widget_configs": widget_configs,
+                "is_global": True,
+                "updated_by": current_user["id"],
+                "updated_at": now
+            }},
+            upsert=True
+        )
+    else:
+        # Save user-specific layout
+        await db.dashboard_layouts.update_one(
+            {"user_id": current_user["id"]},
+            {"$set": {
+                "user_id": current_user["id"],
+                "layout": layout,
+                "widget_configs": widget_configs,
+                "is_global": False,
+                "updated_at": now
+            }},
+            upsert=True
+        )
+    
+    return {"success": True, "message": "Layout saved"}
+
+# ===================== USERS MANAGEMENT =====================
+users_router = APIRouter(prefix="/users", tags=["Users"])
+
+@users_router.get("")
+async def get_all_users(current_user: dict = Depends(get_current_user)):
+    """Get all users (admin only)"""
+    if current_user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required")
+    
+    users = await db.users.find({}, {"_id": 0, "password_hash": 0}).to_list(1000)
+    return users
+
+@users_router.post("")
+async def create_user(user_data: UserCreate, current_user: dict = Depends(get_current_user)):
+    """Create a new user (admin only)"""
+    if current_user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required")
+    
+    # Check if email already exists
+    existing = await db.users.find_one({"email": user_data.email})
+    if existing:
+        raise HTTPException(status_code=400, detail="Email already registered")
+    
+    # Validate role
+    if user_data.role not in ["admin", "operator"]:
+        raise HTTPException(status_code=400, detail="Invalid role. Must be 'admin' or 'operator'")
+    
+    now = datetime.now(timezone.utc)
+    user_dict = {
+        "id": str(uuid.uuid4()),
+        "email": user_data.email,
+        "name": user_data.name,
+        "role": user_data.role,
+        "password_hash": hash_password(user_data.password),
+        "is_active": True,
+        "created_at": now.isoformat(),
+        "updated_at": now.isoformat()
+    }
+    
+    user_insert = user_dict.copy()
+    await db.users.insert_one(user_insert)
+    
+    # Return without password
+    del user_dict["password_hash"]
+    return user_dict
+
+@users_router.get("/{user_id}")
+async def get_user(user_id: str, current_user: dict = Depends(get_current_user)):
+    """Get a specific user"""
+    if current_user.get("role") != "admin" and current_user.get("id") != user_id:
+        raise HTTPException(status_code=403, detail="Access denied")
+    
+    user = await db.users.find_one({"id": user_id}, {"_id": 0, "password_hash": 0})
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    return user
+
+@users_router.put("/{user_id}")
+async def update_user(
+    user_id: str, 
+    user_data: dict,
+    current_user: dict = Depends(get_current_user)
+):
+    """Update a user (admin only)"""
+    if current_user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required")
+    
+    existing = await db.users.find_one({"id": user_id})
+    if not existing:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    # Validate role if provided
+    if "role" in user_data and user_data["role"] not in ["admin", "operator"]:
+        raise HTTPException(status_code=400, detail="Invalid role")
+    
+    update_fields = {}
+    allowed_fields = ["name", "email", "role", "is_active"]
+    for field in allowed_fields:
+        if field in user_data:
+            update_fields[field] = user_data[field]
+    
+    if update_fields:
+        update_fields["updated_at"] = datetime.now(timezone.utc).isoformat()
+        await db.users.update_one({"id": user_id}, {"$set": update_fields})
+    
+    updated = await db.users.find_one({"id": user_id}, {"_id": 0, "password_hash": 0})
+    return updated
+
+@users_router.delete("/{user_id}")
+async def delete_user(user_id: str, current_user: dict = Depends(get_current_user)):
+    """Delete a user (admin only)"""
+    if current_user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required")
+    
+    # Prevent deleting yourself
+    if user_id == current_user.get("id"):
+        raise HTTPException(status_code=400, detail="Cannot delete your own account")
+    
+    existing = await db.users.find_one({"id": user_id})
+    if not existing:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    await db.users.delete_one({"id": user_id})
+    return {"success": True, "message": "User deleted"}
+
+@users_router.post("/{user_id}/reset-password")
+async def reset_user_password(
+    user_id: str,
+    data: dict,
+    current_user: dict = Depends(get_current_user)
+):
+    """Reset a user's password (admin only)"""
+    if current_user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required")
+    
+    new_password = data.get("new_password")
+    if not new_password or len(new_password) < 6:
+        raise HTTPException(status_code=400, detail="Password must be at least 6 characters")
+    
+    existing = await db.users.find_one({"id": user_id})
+    if not existing:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    await db.users.update_one(
+        {"id": user_id},
+        {"$set": {
+            "password_hash": hash_password(new_password),
+            "updated_at": datetime.now(timezone.utc).isoformat()
+        }}
+    )
+    
+    return {"success": True, "message": "Password reset successfully"}
+
+# ===================== OFFICE 365 EMAIL SERVICE =====================
+
+class O365ConfigCreate(BaseModel):
+    """Office 365 / MS Graph Configuration"""
+    tenant_id: str
+    client_id: str
+    client_secret: str
+    sender_email: str
+    sender_name: str = "ATECH NOC Commander"
+    is_active: bool = True
+
+async def send_email_o365(to_emails: List[str], subject: str, body: str, is_html: bool = False):
+    """Send email using Office 365 MS Graph API or SMTP fallback"""
+    # Try MS Graph first
+    o365_config = await db.o365_config.find_one({"is_active": True}, {"_id": 0})
+    
+    if o365_config:
+        try:
+            from azure.identity import ClientSecretCredential
+            from msgraph import GraphServiceClient
+            from msgraph.generated.users.item.send_mail.send_mail_post_request_body import SendMailPostRequestBody
+            from msgraph.generated.models.message import Message
+            from msgraph.generated.models.item_body import ItemBody
+            from msgraph.generated.models.body_type import BodyType
+            from msgraph.generated.models.recipient import Recipient
+            from msgraph.generated.models.email_address import EmailAddress
+            
+            credential = ClientSecretCredential(
+                tenant_id=o365_config["tenant_id"],
+                client_id=o365_config["client_id"],
+                client_secret=o365_config["client_secret"]
+            )
+            
+            client = GraphServiceClient(credential)
+            
+            # Build message
+            message = Message(
+                subject=subject,
+                body=ItemBody(
+                    content_type=BodyType.Html if is_html else BodyType.Text,
+                    content=body
+                ),
+                to_recipients=[
+                    Recipient(email_address=EmailAddress(address=email))
+                    for email in to_emails
+                ]
+            )
+            
+            request_body = SendMailPostRequestBody(
+                message=message,
+                save_to_sent_items=True
+            )
+            
+            sender_email = o365_config.get("sender_email")
+            await client.users.by_user_id(sender_email).send_mail.post(request_body)
+            
+            logger.info(f"Email sent via MS Graph to {to_emails}")
+            return {"success": True, "method": "ms_graph"}
+            
+        except Exception as e:
+            logger.error(f"MS Graph email failed: {e}")
+            # Fall through to SMTP
+    
+    # Try SMTP fallback (Office 365 SMTP or configured SMTP)
+    email_config = await db.email_config.find_one({"is_active": True}, {"_id": 0})
+    
+    if email_config:
+        try:
+            msg = MIMEMultipart('alternative')
+            msg['Subject'] = subject
+            msg['From'] = f"{email_config.get('sender_name', 'NOC')} <{email_config.get('sender_email')}>"
+            msg['To'] = ', '.join(to_emails)
+            
+            if is_html:
+                msg.attach(MIMEText(body, 'html'))
+            else:
+                msg.attach(MIMEText(body, 'plain'))
+            
+            with smtplib.SMTP(email_config.get('smtp_server'), email_config.get('smtp_port')) as server:
+                if email_config.get('use_tls', True):
+                    server.starttls()
+                server.login(email_config.get('username'), email_config.get('password'))
+                server.sendmail(
+                    email_config.get('sender_email'),
+                    to_emails,
+                    msg.as_string()
+                )
+            
+            logger.info(f"Email sent via SMTP to {to_emails}")
+            return {"success": True, "method": "smtp"}
+            
+        except Exception as e:
+            logger.error(f"SMTP email failed: {e}")
+            return {"success": False, "error": str(e)}
+    
+    logger.warning("No email configuration found")
+    return {"success": False, "error": "No email configuration found"}
+
+@settings_router.get("/o365")
+async def get_o365_config(current_user: dict = Depends(get_current_user)):
+    """Get Office 365 configuration (without secrets)"""
+    if current_user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required")
+    
+    config = await db.o365_config.find_one({}, {"_id": 0})
+    if config:
+        # Mask the client secret
+        config["client_secret"] = "***" if config.get("client_secret") else ""
+    return config or {}
+
+@settings_router.post("/o365")
+async def save_o365_config(
+    config: O365ConfigCreate,
+    current_user: dict = Depends(get_current_user)
+):
+    """Save Office 365 configuration"""
+    if current_user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required")
+    
+    now = datetime.now(timezone.utc).isoformat()
+    config_dict = config.model_dump()
+    config_dict["id"] = str(uuid.uuid4())
+    config_dict["created_at"] = now
+    config_dict["updated_at"] = now
+    
+    # Replace or create
+    await db.o365_config.delete_many({})
+    config_insert = config_dict.copy()
+    await db.o365_config.insert_one(config_insert)
+    
+    # Mask secret in response
+    config_dict["client_secret"] = "***"
+    return {"success": True, "config": config_dict}
+
+@settings_router.post("/o365/test")
+async def test_o365_config(current_user: dict = Depends(get_current_user)):
+    """Test Office 365 email configuration"""
+    if current_user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required")
+    
+    config = await db.o365_config.find_one({"is_active": True}, {"_id": 0})
+    if not config:
+        return {"success": False, "error": "No O365 configuration found"}
+    
+    test_email = current_user.get("email")
+    if not test_email:
+        return {"success": False, "error": "No email address for current user"}
+    
+    result = await send_email_o365(
+        to_emails=[test_email],
+        subject="ATECH NOC Commander - Test Email",
+        body=f"""
+        <h2>Test Email from ATECH NOC Commander</h2>
+        <p>This is a test email to verify your Office 365 integration.</p>
+        <p>If you received this email, your configuration is working correctly.</p>
+        <hr>
+        <p><small>Sent at: {datetime.now(timezone.utc).isoformat()}</small></p>
+        """,
+        is_html=True
+    )
+    
+    return result
+
+@settings_router.delete("/o365")
+async def delete_o365_config(current_user: dict = Depends(get_current_user)):
+    """Delete Office 365 configuration"""
+    if current_user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required")
+    
+    await db.o365_config.delete_many({})
+    return {"success": True, "message": "O365 configuration deleted"}
+
 # ===================== SEED DATA =====================
 @api_router.post("/seed")
 async def seed_demo_data(current_user: dict = Depends(get_current_user)):
@@ -4905,6 +5277,7 @@ api_router.include_router(telnet_router)
 api_router.include_router(escalation_router)
 api_router.include_router(settings_router)
 api_router.include_router(agent_exec_router)
+api_router.include_router(users_router)
 
 app.include_router(api_router)
 
