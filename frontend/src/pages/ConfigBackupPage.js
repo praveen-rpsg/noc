@@ -11,6 +11,7 @@ import { Textarea } from '../components/ui/textarea';
 import { toast } from 'sonner';
 import axios from 'axios';
 import { getApiUrl } from '../services/config';
+import { getAuthHeader } from '../services/auth';
 import { useAuth } from '../context/AuthContext';
 import {
   FileText,
@@ -32,11 +33,6 @@ import {
   Play,
   Search
 } from 'lucide-react';
-
-const getAuthHeader = () => {
-  const token = localStorage.getItem('noc_token');
-  return { Authorization: `Bearer ${token}` };
-};
 
 export default function ConfigBackupPage() {
   const { user } = useAuth();

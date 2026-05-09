@@ -70,6 +70,13 @@ const DeviceTypeIcon = ({ type }) => {
   return <Icon className="h-5 w-5 text-muted-foreground" />;
 };
 
+// Helper to get color class based on usage percentage
+const getUsageColorClass = (usage) => {
+  if (usage > 80) return 'bg-red-500';
+  if (usage > 60) return 'bg-amber-500';
+  return 'bg-green-500';
+};
+
 // Helper to check if OS is older than 1 year
 const isOsOutdated = (osInstallDate) => {
   if (!osInstallDate) return false;
@@ -455,7 +462,7 @@ export default function MonitoringPage() {
                         <div className="flex items-center gap-2">
                           <div className="w-16 bg-muted rounded-full h-2">
                             <div 
-                              className={`h-2 rounded-full ${device.cpu_usage > 80 ? 'bg-red-500' : device.cpu_usage > 60 ? 'bg-amber-500' : 'bg-green-500'}`}
+                              className={`h-2 rounded-full ${getUsageColorClass(device.cpu_usage)}`}
                               style={{ width: `${device.cpu_usage}%` }}
                             />
                           </div>
@@ -466,7 +473,7 @@ export default function MonitoringPage() {
                         <div className="flex items-center gap-2">
                           <div className="w-16 bg-muted rounded-full h-2">
                             <div 
-                              className={`h-2 rounded-full ${device.memory_usage > 80 ? 'bg-red-500' : device.memory_usage > 60 ? 'bg-amber-500' : 'bg-green-500'}`}
+                              className={`h-2 rounded-full ${getUsageColorClass(device.memory_usage)}`}
                               style={{ width: `${device.memory_usage}%` }}
                             />
                           </div>

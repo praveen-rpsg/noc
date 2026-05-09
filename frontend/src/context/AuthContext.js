@@ -1,6 +1,13 @@
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import axios from 'axios';
-import { initConfig, getApiUrl, getBackendUrlSync } from '../services/config';
+import { initConfig, getApiUrl } from '../services/config';
+import { 
+  setToken as storeToken, 
+  getToken as retrieveToken, 
+  removeToken, 
+  setUser as storeUser,
+  getUser as retrieveUser 
+} from '../services/auth';
 
 const AuthContext = createContext(null);
 
@@ -13,8 +20,8 @@ export const useAuth = () => {
 };
 
 export const AuthProvider = ({ children }) => {
-  const [user, setUser] = useState(null);
-  const [token, setToken] = useState(localStorage.getItem('noc_token'));
+  const [user, setUser] = useState(() => retrieveUser());
+  const [token, setToken] = useState(() => retrieveToken());
   const [loading, setLoading] = useState(true);
   const [apiReady, setApiReady] = useState(false);
   
@@ -32,8 +39,11 @@ export const AuthProvider = ({ children }) => {
       const API = getApiUrl();
       const response = await axios.get(`${API}/auth/me`);
       setUser(response.data);
+      storeUser(response.data);
     } catch (error) {
-      console.error('Failed to fetch user:', error);
+      if (process.env.NODE_ENV === 'development') {
+        console.debug('Failed to fetch user:', error.message);
+      }
       logout();
     } finally {
       setLoading(false);
@@ -55,7 +65,8 @@ export const AuthProvider = ({ children }) => {
     const API = getApiUrl();
     const response = await axios.post(`${API}/auth/login`, { email, password });
     const { access_token, user: userData } = response.data;
-    localStorage.setItem('noc_token', access_token);
+    storeToken(access_token);
+    storeUser(userData);
     axios.defaults.headers.common['Authorization'] = `Bearer ${access_token}`;
     setToken(access_token);
     setUser(userData);
@@ -66,7 +77,8 @@ export const AuthProvider = ({ children }) => {
     const API = getApiUrl();
     const response = await axios.post(`${API}/auth/register`, { email, password, name, role });
     const { access_token, user: userData } = response.data;
-    localStorage.setItem('noc_token', access_token);
+    storeToken(access_token);
+    storeUser(userData);
     axios.defaults.headers.common['Authorization'] = `Bearer ${access_token}`;
     setToken(access_token);
     setUser(userData);
@@ -74,7 +86,7 @@ export const AuthProvider = ({ children }) => {
   };
 
   const logout = () => {
-    localStorage.removeItem('noc_token');
+    removeToken();
     delete axios.defaults.headers.common['Authorization'];
     setToken(null);
     setUser(null);

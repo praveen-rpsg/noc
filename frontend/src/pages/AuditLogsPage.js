@@ -10,6 +10,7 @@ import { ScrollArea } from '../components/ui/scroll-area';
 import { toast } from 'sonner';
 import axios from 'axios';
 import { getApiUrl } from '../services/config';
+import { getAuthHeader } from '../services/auth';
 import { useAuth } from '../context/AuthContext';
 import {
   FileText,
@@ -35,11 +36,6 @@ import {
   Bot,
   AlertTriangle
 } from 'lucide-react';
-
-const getAuthHeader = () => {
-  const token = localStorage.getItem('noc_token');
-  return { Authorization: `Bearer ${token}` };
-};
 
 // Action type icons
 const ACTION_ICONS = {

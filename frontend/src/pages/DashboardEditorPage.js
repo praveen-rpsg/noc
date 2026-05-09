@@ -13,6 +13,7 @@ import { ScrollArea } from '../components/ui/scroll-area';
 import { toast } from 'sonner';
 import axios from 'axios';
 import { getApiUrl } from '../services/config';
+import { getAuthHeader } from '../services/auth';
 import { useAuth } from '../context/AuthContext';
 import {
   LayoutDashboard,
@@ -56,11 +57,6 @@ import {
   ResponsiveContainer,
   Legend
 } from 'recharts';
-
-const getAuthHeader = () => {
-  const token = localStorage.getItem('noc_token');
-  return { Authorization: `Bearer ${token}` };
-};
 
 // Widget definitions
 const AVAILABLE_WIDGETS = [

@@ -201,7 +201,8 @@ export default function TopologyPage() {
           return;
         }
       } catch (e) {
-        // Invalid JSON, will regenerate
+        // Invalid JSON in localStorage, will regenerate positions
+        console.debug('Regenerating topology positions:', e.message);
       }
     }
     

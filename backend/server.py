@@ -2147,7 +2147,7 @@ async def aaa_login(credentials: UserLogin):
     if not verify_password(password, user_doc.get("password_hash", "")):
         raise HTTPException(status_code=401, detail="Invalid credentials")
     
-    if user_doc.get("is_active") == False:
+    if not user_doc.get("is_active", True):
         raise HTTPException(status_code=401, detail="Account is disabled")
     
     token = create_token(user_doc["id"], user_doc["email"])
@@ -2657,7 +2657,7 @@ async def generate_report(report_type: str, period_start: str, period_end: str, 
         }
     elif report_type == "sla_compliance":
         sla_records = await db.sla_records.find({}, {"_id": 0}).to_list(1000)
-        met_count = len([s for s in sla_records if s.get("resolution_sla_met") == True])
+        met_count = len([s for s in sla_records if s.get("resolution_sla_met")])
         total = len(sla_records) or 1
         content = {
             "total_tracked": len(sla_records),
@@ -2851,8 +2851,8 @@ async def get_sla_metrics(current_user: dict = Depends(get_current_user)):
     records = await db.sla_records.find({}, {"_id": 0}).to_list(1000)
     
     total = len(records) or 1
-    response_met = len([r for r in records if r.get("response_sla_met") == True])
-    resolution_met = len([r for r in records if r.get("resolution_sla_met") == True])
+    response_met = len([r for r in records if r.get("response_sla_met")])
+    resolution_met = len([r for r in records if r.get("resolution_sla_met")])
     
     return {
         "total_tracked": len(records),

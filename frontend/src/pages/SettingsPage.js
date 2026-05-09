@@ -13,6 +13,7 @@ import { ScrollArea } from '../components/ui/scroll-area';
 import { toast } from 'sonner';
 import axios from 'axios';
 import { getApiUrl, getBackendUrlSync, setBackendUrl, testBackendConnection, isElectron } from '../services/config';
+import { getAuthHeader } from '../services/auth';
 import { initializeApi } from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import {
@@ -45,11 +46,6 @@ import {
   RefreshCw,
   Ban
 } from 'lucide-react';
-
-const getAuthHeader = () => {
-  const token = localStorage.getItem('noc_token');
-  return { Authorization: `Bearer ${token}` };
-};
 
 // Generic CRUD Hook
 const useSettingsConfig = (endpoint) => {
@@ -571,7 +567,10 @@ export default function SettingsPage() {
         if (response.data) {
           setEmailConfig(prev => ({ ...prev, ...response.data, password: '' }));
         }
-      } catch (error) {}
+      } catch (error) {
+        // Email config may not exist yet - this is expected for new installations
+        console.debug('Email config not found:', error.message);
+      }
     };
     fetchEmailConfig();
   }, []);
@@ -615,7 +614,10 @@ export default function SettingsPage() {
         if (response.data && Object.keys(response.data).length > 0) {
           setO365Config(prev => ({ ...prev, ...response.data, client_secret: '' }));
         }
-      } catch (error) {}
+      } catch (error) {
+        // O365 config may not exist yet - this is expected for new installations
+        console.debug('O365 config not found:', error.message);
+      }
     };
     fetchO365Config();
   }, []);

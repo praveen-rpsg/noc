@@ -502,21 +502,36 @@ Output installers will be in `frontend/dist/` folder.
 - ✅ Replaced hardcoded test credentials with environment variables
 - ✅ Created `.env.test.example` template for secure test configuration
 - ✅ Replaced insecure `random` module with `secrets` for activation code generation
+- ✅ **Centralized Auth Token Management** - Created `/app/frontend/src/services/auth.js`:
+  - Token expiration validation
+  - Centralized `getAuthHeader()`, `setToken()`, `getToken()`, `removeToken()`
+  - Environment-based logging (only in development)
+  - Easy migration path to httpOnly cookies
 
-#### React Performance & Best Practices
+#### Python Comparison Fixes
+- ✅ Replaced `== True` / `== False` with truthy/falsy checks
+- ✅ Fixed 3 instances in `server.py` (lines 2150, 2660, 2854)
+
+#### React Best Practices
 - ✅ Fixed array index as key issues in 8+ components
-  - SSHTerminalPage, ReportsPage, IncidentsPage, EscalationPage
-  - ConfigBackupPage, NetworkDiagnosticsModal
 - ✅ Moved inline style objects to constants in PerformancePage
-- ✅ Added useMemo for chart configuration objects
+- ✅ Added `useMemo` for chart configuration objects
+- ✅ Fixed empty catch blocks with proper logging (TopologyPage, SettingsPage)
+- ✅ Created helper function `getUsageColorClass()` to reduce nested ternaries
+- ✅ Centralized auth token access across 7 page components
 
 #### Files Updated
+- `/app/frontend/src/services/auth.js` - NEW: Centralized auth management
+- `/app/frontend/src/context/AuthContext.js` - Refactored to use auth service
+- `/app/frontend/src/pages/UserManagementPage.js` - Uses centralized auth
+- `/app/frontend/src/pages/AuditLogsPage.js` - Uses centralized auth
+- `/app/frontend/src/pages/ConfigBackupPage.js` - Uses centralized auth
+- `/app/frontend/src/pages/DashboardEditorPage.js` - Uses centralized auth
+- `/app/frontend/src/pages/NetworkDiscoveryPage.js` - Uses centralized auth
+- `/app/frontend/src/pages/SettingsPage.js` - Uses centralized auth, fixed empty catches
+- `/app/frontend/src/pages/ReportsPage.js` - Uses centralized auth
+- `/app/frontend/src/pages/MonitoringPage.js` - Added getUsageColorClass helper
+- `/app/frontend/src/pages/TopologyPage.js` - Fixed empty catch block
+- `/app/backend/server.py` - Fixed comparison anti-patterns
 - `/app/backend/agents.py` - Secure random for activation codes
 - `/app/backend/tests/*.py` - Environment variable credentials
-- `/app/frontend/src/pages/PerformancePage.js` - Memoized chart styles
-- `/app/frontend/src/pages/SSHTerminalPage.js` - Fixed key props
-- `/app/frontend/src/pages/ReportsPage.js` - Fixed key props
-- `/app/frontend/src/pages/IncidentsPage.js` - Fixed key props
-- `/app/frontend/src/pages/EscalationPage.js` - Fixed key props
-- `/app/frontend/src/pages/ConfigBackupPage.js` - Fixed key props
-- `/app/frontend/src/components/NetworkDiagnosticsModal.js` - Fixed key props

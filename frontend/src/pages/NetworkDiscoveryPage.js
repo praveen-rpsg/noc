@@ -12,6 +12,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs'
 import { toast } from 'sonner';
 import axios from 'axios';
 import { getApiUrl } from '../services/config';
+import { getAuthHeader } from '../services/auth';
 import { useAuth } from '../context/AuthContext';
 import {
   Search,
@@ -34,11 +35,6 @@ import {
   Scan,
   Globe
 } from 'lucide-react';
-
-const getAuthHeader = () => {
-  const token = localStorage.getItem('noc_token');
-  return { Authorization: `Bearer ${token}` };
-};
 
 // Discovery Methods
 const DISCOVERY_METHODS = [

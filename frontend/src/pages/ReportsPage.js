@@ -7,6 +7,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '.
 import { ScrollArea } from '../components/ui/scroll-area';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '../components/ui/dialog';
 import { reportsApi } from '../services/api';
+import { getToken } from '../services/auth';
 import { toast } from 'sonner';
 import {
   FileText,
@@ -68,7 +69,7 @@ export default function ReportsPage() {
   const handleDownloadPDF = async (reportId, reportTitle) => {
     setDownloadingId(reportId);
     try {
-      const token = localStorage.getItem('noc_token');
+      const token = getToken();
       const response = await fetch(`${BACKEND_URL}/api/reports/${reportId}/download/pdf`, {
         headers: { Authorization: `Bearer ${token}` }
       });
@@ -95,7 +96,7 @@ export default function ReportsPage() {
   const handleDownloadCSV = async (reportId, reportTitle) => {
     setDownloadingId(reportId);
     try {
-      const token = localStorage.getItem('noc_token');
+      const token = getToken();
       const response = await fetch(`${BACKEND_URL}/api/reports/${reportId}/download/csv`, {
         headers: { Authorization: `Bearer ${token}` }
       });
