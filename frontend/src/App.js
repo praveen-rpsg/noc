@@ -27,6 +27,8 @@ import AgentsPage from "./pages/AgentsPage";
 import EscalationPage from "./pages/EscalationPage";
 import SettingsPage from "./pages/SettingsPage";
 import NetworkDiscoveryPage from "./pages/NetworkDiscoveryPage";
+import AuditLogsPage from "./pages/AuditLogsPage";
+import ConfigBackupPage from "./pages/ConfigBackupPage";
 
 // License check hook
 const useLicenseStatus = () => {
@@ -255,6 +257,22 @@ function AppRoutes() {
         element={
           <ProtectedRoute>
             <UserManagementPage />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/audit-logs"
+        element={
+          <ProtectedRoute>
+            <AuditLogsPage />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/config-backup"
+        element={
+          <ProtectedRoute>
+            <ConfigBackupPage />
           </ProtectedRoute>
         }
       />

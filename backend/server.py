@@ -2021,6 +2021,149 @@ async def login(credentials: UserLogin):
 async def get_me(current_user: dict = Depends(get_current_user)):
     return User(**current_user)
 
+# ===================== AAA-ENHANCED LOGIN =====================
+@auth_router.post("/aaa-login")
+async def aaa_login(credentials: UserLogin):
+    """Login with AAA authentication support - tries RADIUS/TACACS+ first, falls back to local"""
+    email = credentials.email
+    password = credentials.password
+    
+    # First check if user exists locally
+    user_doc = await db.users.find_one({"email": email})
+    
+    # Try AAA authentication first if servers are configured
+    aaa_configs = await db.aaa_config.find({"is_active": True, "use_for_login": True}, {"_id": 0}).to_list(10)
+    
+    if aaa_configs:
+        # Extract username from email for AAA
+        aaa_username = email.split('@')[0]
+        
+        for config in aaa_configs:
+            try:
+                server_type = config.get("server_type", "radius").lower()
+                
+                if server_type == "radius":
+                    try:
+                        from pyrad.client import Client
+                        from pyrad.dictionary import Dictionary
+                        import pyrad.packet
+                        
+                        srv = Client(
+                            server=config.get("primary_host"),
+                            secret=config.get("shared_secret", "").encode(),
+                            dict=Dictionary()
+                        )
+                        srv.timeout = config.get("timeout", 5)
+                        
+                        req = srv.CreateAuthPacket(code=pyrad.packet.AccessRequest, User_Name=aaa_username)
+                        req["User-Password"] = req.PwCrypt(password)
+                        reply = srv.SendPacket(req)
+                        
+                        if reply.code == pyrad.packet.AccessAccept:
+                            # AAA auth successful
+                            if not user_doc:
+                                user_doc = {
+                                    "id": str(uuid.uuid4()),
+                                    "email": email,
+                                    "name": aaa_username,
+                                    "role": "operator",
+                                    "password_hash": "",
+                                    "is_active": True,
+                                    "auth_method": "radius",
+                                    "created_at": datetime.now(timezone.utc).isoformat()
+                                }
+                                user_insert = user_doc.copy()
+                                await db.users.insert_one(user_insert)
+                            
+                            token = create_token(user_doc["id"], user_doc["email"])
+                            return {
+                                "access_token": token,
+                                "token_type": "bearer",
+                                "user": {
+                                    "id": user_doc["id"],
+                                    "email": user_doc["email"],
+                                    "name": user_doc.get("name", ""),
+                                    "role": user_doc.get("role", "operator")
+                                },
+                                "auth_method": "radius"
+                            }
+                    except Exception as e:
+                        logger.warning(f"RADIUS auth failed: {e}")
+                
+                elif server_type == "tacacs":
+                    try:
+                        from tacacs_plus.client import TACACSClient
+                        from tacacs_plus.flags import TAC_PLUS_AUTHEN_TYPE_ASCII
+                        
+                        client = TACACSClient(
+                            host=config.get("primary_host"),
+                            port=config.get("primary_port", 49),
+                            secret=config.get("shared_secret", ""),
+                            timeout=config.get("timeout", 5)
+                        )
+                        
+                        auth = client.authenticate(
+                            aaa_username,
+                            password,
+                            authen_type=TAC_PLUS_AUTHEN_TYPE_ASCII
+                        )
+                        
+                        if auth.valid:
+                            if not user_doc:
+                                user_doc = {
+                                    "id": str(uuid.uuid4()),
+                                    "email": email,
+                                    "name": aaa_username,
+                                    "role": "operator",
+                                    "password_hash": "",
+                                    "is_active": True,
+                                    "auth_method": "tacacs",
+                                    "created_at": datetime.now(timezone.utc).isoformat()
+                                }
+                                user_insert = user_doc.copy()
+                                await db.users.insert_one(user_insert)
+                            
+                            token = create_token(user_doc["id"], user_doc["email"])
+                            return {
+                                "access_token": token,
+                                "token_type": "bearer",
+                                "user": {
+                                    "id": user_doc["id"],
+                                    "email": user_doc["email"],
+                                    "name": user_doc.get("name", ""),
+                                    "role": user_doc.get("role", "operator")
+                                },
+                                "auth_method": "tacacs"
+                            }
+                    except Exception as e:
+                        logger.warning(f"TACACS+ auth failed: {e}")
+            except Exception as e:
+                logger.error(f"AAA config error: {e}")
+    
+    # Fallback to local authentication
+    if not user_doc:
+        raise HTTPException(status_code=401, detail="Invalid credentials")
+    
+    if not verify_password(password, user_doc.get("password_hash", "")):
+        raise HTTPException(status_code=401, detail="Invalid credentials")
+    
+    if user_doc.get("is_active") == False:
+        raise HTTPException(status_code=401, detail="Account is disabled")
+    
+    token = create_token(user_doc["id"], user_doc["email"])
+    
+    return {
+        "access_token": token,
+        "token_type": "bearer",
+        "user": {
+            "id": user_doc["id"],
+            "email": user_doc["email"],
+            "name": user_doc.get("name", ""),
+            "role": user_doc.get("role", "operator")
+        },
+        "auth_method": "local"
+    }
+
 # ===================== DEVICE ROUTES =====================
 @devices_router.get("", response_model=List[Device])
 async def get_devices(current_user: dict = Depends(get_current_user)):
@@ -5278,6 +5421,965 @@ api_router.include_router(escalation_router)
 api_router.include_router(settings_router)
 api_router.include_router(agent_exec_router)
 api_router.include_router(users_router)
+
+# ===================== AUDIT LOGGING SERVICE =====================
+
+class AuditLogType(str, Enum):
+    LOGIN = "login"
+    LOGOUT = "logout"
+    USER_CREATE = "user_create"
+    USER_UPDATE = "user_update"
+    USER_DELETE = "user_delete"
+    DEVICE_CREATE = "device_create"
+    DEVICE_UPDATE = "device_update"
+    DEVICE_DELETE = "device_delete"
+    CONFIG_BACKUP = "config_backup"
+    CONFIG_RESTORE = "config_restore"
+    CONFIG_FETCH = "config_fetch"
+    INCIDENT_CREATE = "incident_create"
+    INCIDENT_UPDATE = "incident_update"
+    INCIDENT_RESOLVE = "incident_resolve"
+    ALERT_ACK = "alert_acknowledge"
+    ALERT_RESOLVE = "alert_resolve"
+    SSH_CONNECT = "ssh_connect"
+    SSH_COMMAND = "ssh_command"
+    AI_AGENT_RUN = "ai_agent_run"
+    AI_ACTION_APPROVE = "ai_action_approve"
+    AI_ACTION_REJECT = "ai_action_reject"
+    AAA_AUTH = "aaa_auth"
+    SETTINGS_UPDATE = "settings_update"
+    SYSTEM_ACTION = "system_action"
+
+class AuditLog(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    user_id: Optional[str] = None
+    user_email: Optional[str] = None
+    user_name: Optional[str] = None
+    action_type: str
+    resource_type: Optional[str] = None  # device, user, incident, etc.
+    resource_id: Optional[str] = None
+    resource_name: Optional[str] = None
+    description: str
+    details: Optional[Dict[str, Any]] = None
+    ip_address: Optional[str] = None
+    user_agent: Optional[str] = None
+    success: bool = True
+    error_message: Optional[str] = None
+
+AUDIT_RETENTION_DAYS = 90
+
+async def create_audit_log(
+    action_type: str,
+    description: str,
+    user: dict = None,
+    resource_type: str = None,
+    resource_id: str = None,
+    resource_name: str = None,
+    details: dict = None,
+    success: bool = True,
+    error_message: str = None,
+    ip_address: str = None
+):
+    """Create an audit log entry"""
+    log_entry = {
+        "id": str(uuid.uuid4()),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "user_id": user.get("id") if user else None,
+        "user_email": user.get("email") if user else None,
+        "user_name": user.get("name") if user else None,
+        "action_type": action_type,
+        "resource_type": resource_type,
+        "resource_id": resource_id,
+        "resource_name": resource_name,
+        "description": description,
+        "details": details,
+        "ip_address": ip_address,
+        "success": success,
+        "error_message": error_message
+    }
+    
+    insert_entry = log_entry.copy()
+    await db.audit_logs.insert_one(insert_entry)
+    return log_entry
+
+async def cleanup_old_audit_logs():
+    """Remove audit logs older than retention period"""
+    cutoff_date = datetime.now(timezone.utc) - timedelta(days=AUDIT_RETENTION_DAYS)
+    result = await db.audit_logs.delete_many({
+        "timestamp": {"$lt": cutoff_date.isoformat()}
+    })
+    return result.deleted_count
+
+# Audit Router
+audit_router = APIRouter(prefix="/audit", tags=["Audit"])
+
+@audit_router.get("/logs")
+async def get_audit_logs(
+    page: int = 1,
+    limit: int = 50,
+    action_type: Optional[str] = None,
+    user_email: Optional[str] = None,
+    resource_type: Optional[str] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    success_only: Optional[bool] = None,
+    current_user: dict = Depends(get_current_user)
+):
+    """Get audit logs with filtering and pagination"""
+    if current_user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required")
+    
+    query = {}
+    
+    if action_type:
+        query["action_type"] = action_type
+    if user_email:
+        query["user_email"] = {"$regex": user_email, "$options": "i"}
+    if resource_type:
+        query["resource_type"] = resource_type
+    if start_date:
+        query["timestamp"] = {"$gte": start_date}
+    if end_date:
+        if "timestamp" in query:
+            query["timestamp"]["$lte"] = end_date
+        else:
+            query["timestamp"] = {"$lte": end_date}
+    if success_only is not None:
+        query["success"] = success_only
+    
+    skip = (page - 1) * limit
+    total = await db.audit_logs.count_documents(query)
+    logs = await db.audit_logs.find(query, {"_id": 0}).sort("timestamp", -1).skip(skip).limit(limit).to_list(limit)
+    
+    return {
+        "logs": logs,
+        "total": total,
+        "page": page,
+        "limit": limit,
+        "pages": (total + limit - 1) // limit
+    }
+
+@audit_router.get("/logs/stats")
+async def get_audit_stats(current_user: dict = Depends(get_current_user)):
+    """Get audit log statistics"""
+    if current_user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required")
+    
+    # Get counts by action type
+    pipeline = [
+        {"$group": {"_id": "$action_type", "count": {"$sum": 1}}},
+        {"$sort": {"count": -1}}
+    ]
+    action_counts = await db.audit_logs.aggregate(pipeline).to_list(100)
+    
+    # Get counts by user
+    user_pipeline = [
+        {"$match": {"user_email": {"$ne": None}}},
+        {"$group": {"_id": "$user_email", "count": {"$sum": 1}}},
+        {"$sort": {"count": -1}},
+        {"$limit": 10}
+    ]
+    user_counts = await db.audit_logs.aggregate(user_pipeline).to_list(10)
+    
+    # Get today's count
+    today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+    today_count = await db.audit_logs.count_documents({"timestamp": {"$gte": today.isoformat()}})
+    
+    # Get total count
+    total_count = await db.audit_logs.count_documents({})
+    
+    # Get failure count
+    failure_count = await db.audit_logs.count_documents({"success": False})
+    
+    return {
+        "total_logs": total_count,
+        "today_logs": today_count,
+        "failed_actions": failure_count,
+        "by_action_type": {item["_id"]: item["count"] for item in action_counts},
+        "top_users": [{"email": item["_id"], "count": item["count"]} for item in user_counts],
+        "retention_days": AUDIT_RETENTION_DAYS
+    }
+
+@audit_router.get("/logs/export")
+async def export_audit_logs(
+    format: str = "csv",
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    current_user: dict = Depends(get_current_user)
+):
+    """Export audit logs as CSV or JSON"""
+    if current_user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required")
+    
+    query = {}
+    if start_date:
+        query["timestamp"] = {"$gte": start_date}
+    if end_date:
+        if "timestamp" in query:
+            query["timestamp"]["$lte"] = end_date
+        else:
+            query["timestamp"] = {"$lte": end_date}
+    
+    logs = await db.audit_logs.find(query, {"_id": 0}).sort("timestamp", -1).to_list(10000)
+    
+    await create_audit_log(
+        action_type="system_action",
+        description=f"Exported {len(logs)} audit logs as {format.upper()}",
+        user=current_user,
+        details={"format": format, "count": len(logs)}
+    )
+    
+    if format == "json":
+        return {"logs": logs, "exported_at": datetime.now(timezone.utc).isoformat()}
+    
+    # CSV format
+    import csv
+    import io
+    
+    output = io.StringIO()
+    if logs:
+        writer = csv.DictWriter(output, fieldnames=logs[0].keys())
+        writer.writeheader()
+        for log in logs:
+            # Flatten details dict
+            row = {k: (json.dumps(v) if isinstance(v, dict) else v) for k, v in log.items()}
+            writer.writerow(row)
+    
+    csv_content = output.getvalue()
+    
+    return Response(
+        content=csv_content,
+        media_type="text/csv",
+        headers={"Content-Disposition": f"attachment; filename=audit_logs_{datetime.now().strftime('%Y%m%d')}.csv"}
+    )
+
+@audit_router.delete("/logs/cleanup")
+async def cleanup_audit_logs(current_user: dict = Depends(get_current_user)):
+    """Manually trigger cleanup of old audit logs"""
+    if current_user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required")
+    
+    deleted = await cleanup_old_audit_logs()
+    
+    await create_audit_log(
+        action_type="system_action",
+        description=f"Manual audit log cleanup - deleted {deleted} old logs",
+        user=current_user,
+        details={"deleted_count": deleted, "retention_days": AUDIT_RETENTION_DAYS}
+    )
+    
+    return {"success": True, "deleted_count": deleted}
+
+@audit_router.get("/action-types")
+async def get_action_types(current_user: dict = Depends(get_current_user)):
+    """Get list of all action types"""
+    return [e.value for e in AuditLogType]
+
+# ===================== DEVICE CONFIG BACKUP/RESTORE SERVICE =====================
+
+# Multi-vendor config commands
+VENDOR_CONFIG_COMMANDS = {
+    "cisco": {
+        "fetch": "show running-config",
+        "save": "copy running-config startup-config",
+        "terminal_length": "terminal length 0",
+        "exit": "exit"
+    },
+    "juniper": {
+        "fetch": "show configuration | display set",
+        "save": "commit",
+        "terminal_length": "set cli screen-length 0",
+        "exit": "exit"
+    },
+    "arista": {
+        "fetch": "show running-config",
+        "save": "copy running-config startup-config",
+        "terminal_length": "terminal length 0",
+        "exit": "exit"
+    },
+    "huawei": {
+        "fetch": "display current-configuration",
+        "save": "save",
+        "terminal_length": "screen-length 0 temporary",
+        "exit": "quit"
+    },
+    "palo alto": {
+        "fetch": "show config running",
+        "save": "commit",
+        "terminal_length": "set cli pager off",
+        "exit": "exit"
+    },
+    "fortinet": {
+        "fetch": "show full-configuration",
+        "save": "execute backup config flash",
+        "terminal_length": "config system console\nset output standard\nend",
+        "exit": "exit"
+    },
+    "f5": {
+        "fetch": "tmsh list",
+        "save": "tmsh save sys config",
+        "terminal_length": "",
+        "exit": "exit"
+    },
+    "default": {
+        "fetch": "show running-config",
+        "save": "write memory",
+        "terminal_length": "terminal length 0",
+        "exit": "exit"
+    }
+}
+
+def get_vendor_commands(vendor: str) -> dict:
+    """Get config commands for a specific vendor"""
+    vendor_lower = vendor.lower() if vendor else "default"
+    for key in VENDOR_CONFIG_COMMANDS:
+        if key in vendor_lower:
+            return VENDOR_CONFIG_COMMANDS[key]
+    return VENDOR_CONFIG_COMMANDS["default"]
+
+class ConfigBackupService:
+    """Service for device configuration backup and restore"""
+    
+    @staticmethod
+    async def fetch_device_config(device: dict, credentials: dict = None) -> dict:
+        """Fetch running configuration from a device via SSH"""
+        ip = device.get("ip_address")
+        vendor = device.get("vendor", "")
+        
+        if not ip:
+            return {"success": False, "error": "No IP address configured"}
+        
+        # Get vendor-specific commands
+        commands = get_vendor_commands(vendor)
+        
+        # Get SSH credentials
+        if not credentials:
+            creds = await db.settings_ssh.find_one({"device_id": device.get("id")}, {"_id": 0})
+            if not creds:
+                creds = await db.settings_ssh.find_one({"device_type": device.get("type")}, {"_id": 0})
+            if not creds:
+                creds = {"username": "admin", "password": "", "port": 22}
+        else:
+            creds = credentials
+        
+        try:
+            client = paramiko.SSHClient()
+            client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+            client.connect(
+                ip,
+                port=creds.get("port", 22),
+                username=creds.get("username", "admin"),
+                password=creds.get("password", ""),
+                timeout=30,
+                allow_agent=False,
+                look_for_keys=False
+            )
+            
+            # Create shell session
+            shell = client.invoke_shell()
+            import time
+            time.sleep(1)
+            
+            # Set terminal length
+            if commands.get("terminal_length"):
+                shell.send(commands["terminal_length"] + "\n")
+                time.sleep(0.5)
+            
+            # Fetch config
+            shell.send(commands["fetch"] + "\n")
+            time.sleep(3)  # Wait for full config output
+            
+            output = ""
+            while shell.recv_ready():
+                output += shell.recv(65535).decode('utf-8', errors='ignore')
+                time.sleep(0.1)
+            
+            # Clean up
+            shell.send(commands["exit"] + "\n")
+            client.close()
+            
+            # Parse output - remove command echo and prompts
+            config_lines = output.split('\n')
+            clean_config = []
+            capture = False
+            for line in config_lines:
+                if commands["fetch"].split()[0] in line:
+                    capture = True
+                    continue
+                if capture:
+                    # Stop at exit command or next prompt
+                    if line.strip().startswith(commands["exit"]):
+                        break
+                    clean_config.append(line)
+            
+            config_text = '\n'.join(clean_config).strip()
+            
+            return {
+                "success": True,
+                "config": config_text,
+                "vendor": vendor,
+                "fetched_at": datetime.now(timezone.utc).isoformat()
+            }
+            
+        except Exception as e:
+            logger.error(f"Config fetch failed for {ip}: {e}")
+            return {"success": False, "error": str(e)}
+    
+    @staticmethod
+    async def save_config_backup(device: dict, config: str, user: dict, backup_type: str = "manual") -> dict:
+        """Save a configuration backup to database"""
+        # Get latest version number
+        latest = await db.config_backups.find_one(
+            {"device_id": device.get("id")},
+            sort=[("version", -1)]
+        )
+        version = (latest.get("version", 0) if latest else 0) + 1
+        
+        backup_record = {
+            "id": str(uuid.uuid4()),
+            "device_id": device.get("id"),
+            "device_name": device.get("name"),
+            "device_ip": device.get("ip_address"),
+            "vendor": device.get("vendor"),
+            "config_data": config,
+            "config_hash": hash(config),
+            "version": version,
+            "backup_type": backup_type,  # manual, scheduled, pre-change
+            "created_by": user.get("name"),
+            "created_by_id": user.get("id"),
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "size_bytes": len(config.encode('utf-8'))
+        }
+        
+        backup_insert = backup_record.copy()
+        await db.config_backups.insert_one(backup_insert)
+        
+        # Remove config_data from response (too large)
+        del backup_record["config_data"]
+        return backup_record
+    
+    @staticmethod
+    async def restore_config(device: dict, backup_id: str, credentials: dict = None) -> dict:
+        """Restore a configuration to a device"""
+        # Get backup
+        backup = await db.config_backups.find_one({"id": backup_id}, {"_id": 0})
+        if not backup:
+            return {"success": False, "error": "Backup not found"}
+        
+        ip = device.get("ip_address")
+        vendor = device.get("vendor", "")
+        
+        if not ip:
+            return {"success": False, "error": "No IP address configured"}
+        
+        # Get SSH credentials
+        if not credentials:
+            creds = await db.settings_ssh.find_one({"device_id": device.get("id")}, {"_id": 0})
+            if not creds:
+                creds = await db.settings_ssh.find_one({"device_type": device.get("type")}, {"_id": 0})
+            if not creds:
+                return {"success": False, "error": "No SSH credentials configured"}
+        else:
+            creds = credentials
+        
+        # Note: Full config restore is complex and vendor-specific
+        # This is a simplified implementation
+        try:
+            client = paramiko.SSHClient()
+            client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+            client.connect(
+                ip,
+                port=creds.get("port", 22),
+                username=creds.get("username", "admin"),
+                password=creds.get("password", ""),
+                timeout=30,
+                allow_agent=False,
+                look_for_keys=False
+            )
+            
+            # For safety, we'll just save the config to a file on the device
+            # Full restore requires config mode and is vendor-specific
+            commands = get_vendor_commands(vendor)
+            
+            # Execute save command
+            stdin, stdout, stderr = client.exec_command(commands["save"], timeout=60)
+            output = stdout.read().decode('utf-8')
+            error = stderr.read().decode('utf-8')
+            
+            client.close()
+            
+            return {
+                "success": True,
+                "message": "Configuration restore initiated",
+                "output": output,
+                "backup_version": backup.get("version"),
+                "restored_at": datetime.now(timezone.utc).isoformat()
+            }
+            
+        except Exception as e:
+            logger.error(f"Config restore failed for {ip}: {e}")
+            return {"success": False, "error": str(e)}
+
+config_backup_service = ConfigBackupService()
+
+# Config Backup Router
+backup_router = APIRouter(prefix="/backup", tags=["Backup"])
+
+@backup_router.post("/devices/{device_id}/fetch")
+async def fetch_device_config(
+    device_id: str,
+    credentials: Optional[dict] = None,
+    current_user: dict = Depends(get_current_user)
+):
+    """Fetch current running configuration from a device"""
+    device = await db.devices.find_one({"id": device_id}, {"_id": 0})
+    if not device:
+        raise HTTPException(status_code=404, detail="Device not found")
+    
+    result = await config_backup_service.fetch_device_config(device, credentials)
+    
+    await create_audit_log(
+        action_type=AuditLogType.CONFIG_FETCH.value,
+        description=f"Fetched configuration from {device.get('name')}",
+        user=current_user,
+        resource_type="device",
+        resource_id=device_id,
+        resource_name=device.get("name"),
+        success=result.get("success", False),
+        error_message=result.get("error")
+    )
+    
+    return result
+
+@backup_router.post("/devices/{device_id}/backup")
+async def create_device_backup(
+    device_id: str,
+    backup_type: str = "manual",
+    credentials: Optional[dict] = None,
+    current_user: dict = Depends(get_current_user)
+):
+    """Create a configuration backup for a device"""
+    device = await db.devices.find_one({"id": device_id}, {"_id": 0})
+    if not device:
+        raise HTTPException(status_code=404, detail="Device not found")
+    
+    # First fetch the config
+    fetch_result = await config_backup_service.fetch_device_config(device, credentials)
+    
+    if not fetch_result.get("success"):
+        await create_audit_log(
+            action_type=AuditLogType.CONFIG_BACKUP.value,
+            description=f"Failed to backup configuration for {device.get('name')}",
+            user=current_user,
+            resource_type="device",
+            resource_id=device_id,
+            resource_name=device.get("name"),
+            success=False,
+            error_message=fetch_result.get("error")
+        )
+        raise HTTPException(status_code=500, detail=fetch_result.get("error"))
+    
+    # Save the backup
+    backup = await config_backup_service.save_config_backup(
+        device, fetch_result["config"], current_user, backup_type
+    )
+    
+    await create_audit_log(
+        action_type=AuditLogType.CONFIG_BACKUP.value,
+        description=f"Created configuration backup v{backup['version']} for {device.get('name')}",
+        user=current_user,
+        resource_type="device",
+        resource_id=device_id,
+        resource_name=device.get("name"),
+        details={"backup_id": backup["id"], "version": backup["version"], "size": backup["size_bytes"]}
+    )
+    
+    return backup
+
+@backup_router.get("/devices/{device_id}/backups")
+async def get_device_backups(device_id: str, current_user: dict = Depends(get_current_user)):
+    """Get all backups for a device"""
+    backups = await db.config_backups.find(
+        {"device_id": device_id},
+        {"_id": 0, "config_data": 0}  # Exclude large config data
+    ).sort("created_at", -1).to_list(100)
+    
+    return backups
+
+@backup_router.get("/backups/{backup_id}")
+async def get_backup(backup_id: str, current_user: dict = Depends(get_current_user)):
+    """Get a specific backup with full config"""
+    backup = await db.config_backups.find_one({"id": backup_id}, {"_id": 0})
+    if not backup:
+        raise HTTPException(status_code=404, detail="Backup not found")
+    return backup
+
+@backup_router.post("/devices/{device_id}/restore/{backup_id}")
+async def restore_device_config(
+    device_id: str,
+    backup_id: str,
+    credentials: Optional[dict] = None,
+    current_user: dict = Depends(get_current_user)
+):
+    """Restore a configuration backup to a device"""
+    device = await db.devices.find_one({"id": device_id}, {"_id": 0})
+    if not device:
+        raise HTTPException(status_code=404, detail="Device not found")
+    
+    result = await config_backup_service.restore_config(device, backup_id, credentials)
+    
+    await create_audit_log(
+        action_type=AuditLogType.CONFIG_RESTORE.value,
+        description=f"Restored configuration backup to {device.get('name')}",
+        user=current_user,
+        resource_type="device",
+        resource_id=device_id,
+        resource_name=device.get("name"),
+        details={"backup_id": backup_id},
+        success=result.get("success", False),
+        error_message=result.get("error")
+    )
+    
+    return result
+
+@backup_router.get("/backups/{backup_id}/diff/{compare_id}")
+async def compare_backups(
+    backup_id: str,
+    compare_id: str,
+    current_user: dict = Depends(get_current_user)
+):
+    """Compare two configuration backups"""
+    backup1 = await db.config_backups.find_one({"id": backup_id}, {"_id": 0})
+    backup2 = await db.config_backups.find_one({"id": compare_id}, {"_id": 0})
+    
+    if not backup1 or not backup2:
+        raise HTTPException(status_code=404, detail="Backup not found")
+    
+    import difflib
+    
+    config1_lines = backup1.get("config_data", "").splitlines(keepends=True)
+    config2_lines = backup2.get("config_data", "").splitlines(keepends=True)
+    
+    diff = list(difflib.unified_diff(
+        config1_lines,
+        config2_lines,
+        fromfile=f"v{backup1.get('version')} ({backup1.get('created_at')})",
+        tofile=f"v{backup2.get('version')} ({backup2.get('created_at')})"
+    ))
+    
+    return {
+        "backup1": {"id": backup_id, "version": backup1.get("version"), "created_at": backup1.get("created_at")},
+        "backup2": {"id": compare_id, "version": backup2.get("version"), "created_at": backup2.get("created_at")},
+        "diff": ''.join(diff),
+        "changes_detected": len(diff) > 0
+    }
+
+@backup_router.delete("/backups/{backup_id}")
+async def delete_backup(backup_id: str, current_user: dict = Depends(get_current_user)):
+    """Delete a configuration backup"""
+    if current_user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required")
+    
+    backup = await db.config_backups.find_one({"id": backup_id}, {"_id": 0})
+    if not backup:
+        raise HTTPException(status_code=404, detail="Backup not found")
+    
+    await db.config_backups.delete_one({"id": backup_id})
+    
+    await create_audit_log(
+        action_type="system_action",
+        description=f"Deleted configuration backup v{backup.get('version')} for {backup.get('device_name')}",
+        user=current_user,
+        resource_type="backup",
+        resource_id=backup_id,
+        details={"device_id": backup.get("device_id"), "version": backup.get("version")}
+    )
+    
+    return {"success": True, "message": "Backup deleted"}
+
+@backup_router.get("/all")
+async def get_all_backups(
+    limit: int = 50,
+    device_id: Optional[str] = None,
+    current_user: dict = Depends(get_current_user)
+):
+    """Get all backups across all devices"""
+    query = {}
+    if device_id:
+        query["device_id"] = device_id
+    
+    backups = await db.config_backups.find(
+        query,
+        {"_id": 0, "config_data": 0}
+    ).sort("created_at", -1).to_list(limit)
+    
+    return backups
+
+# ===================== AAA AUTHENTICATION SERVICE =====================
+
+class AAAService:
+    """Service for RADIUS/TACACS+ authentication"""
+    
+    @staticmethod
+    async def authenticate_radius(username: str, password: str, server_config: dict) -> dict:
+        """Authenticate user against RADIUS server"""
+        try:
+            from pyrad.client import Client
+            from pyrad.dictionary import Dictionary
+            from pyrad import packet
+            import pyrad.packet
+            
+            # Create RADIUS client
+            srv = Client(
+                server=server_config.get("primary_host"),
+                secret=server_config.get("shared_secret", "").encode(),
+                dict=Dictionary()
+            )
+            srv.timeout = server_config.get("timeout", 5)
+            srv.retries = server_config.get("retries", 3)
+            
+            # Create auth request
+            req = srv.CreateAuthPacket(code=pyrad.packet.AccessRequest, User_Name=username)
+            req["User-Password"] = req.PwCrypt(password)
+            
+            # Send request
+            reply = srv.SendPacket(req)
+            
+            if reply.code == pyrad.packet.AccessAccept:
+                return {
+                    "success": True,
+                    "method": "radius",
+                    "server": server_config.get("primary_host"),
+                    "message": "Authentication successful"
+                }
+            else:
+                return {
+                    "success": False,
+                    "method": "radius",
+                    "server": server_config.get("primary_host"),
+                    "message": "Authentication rejected"
+                }
+                
+        except Exception as e:
+            logger.error(f"RADIUS authentication error: {e}")
+            
+            # Try secondary server if available
+            if server_config.get("secondary_host"):
+                try:
+                    srv = Client(
+                        server=server_config.get("secondary_host"),
+                        secret=server_config.get("shared_secret", "").encode(),
+                        dict=Dictionary()
+                    )
+                    srv.timeout = server_config.get("timeout", 5)
+                    
+                    req = srv.CreateAuthPacket(code=pyrad.packet.AccessRequest, User_Name=username)
+                    req["User-Password"] = req.PwCrypt(password)
+                    reply = srv.SendPacket(req)
+                    
+                    if reply.code == pyrad.packet.AccessAccept:
+                        return {
+                            "success": True,
+                            "method": "radius",
+                            "server": server_config.get("secondary_host"),
+                            "message": "Authentication successful (secondary)"
+                        }
+                except Exception as e2:
+                    logger.error(f"RADIUS secondary auth error: {e2}")
+            
+            return {
+                "success": False,
+                "method": "radius",
+                "error": str(e),
+                "message": "RADIUS server unreachable"
+            }
+    
+    @staticmethod
+    async def authenticate_tacacs(username: str, password: str, server_config: dict) -> dict:
+        """Authenticate user against TACACS+ server"""
+        try:
+            from tacacs_plus.client import TACACSClient
+            from tacacs_plus.flags import TAC_PLUS_AUTHEN_TYPE_ASCII
+            
+            client = TACACSClient(
+                host=server_config.get("primary_host"),
+                port=server_config.get("primary_port", 49),
+                secret=server_config.get("shared_secret", ""),
+                timeout=server_config.get("timeout", 5)
+            )
+            
+            # Authenticate
+            auth = client.authenticate(
+                username,
+                password,
+                authen_type=TAC_PLUS_AUTHEN_TYPE_ASCII
+            )
+            
+            if auth.valid:
+                return {
+                    "success": True,
+                    "method": "tacacs",
+                    "server": server_config.get("primary_host"),
+                    "message": "Authentication successful"
+                }
+            else:
+                return {
+                    "success": False,
+                    "method": "tacacs",
+                    "server": server_config.get("primary_host"),
+                    "message": "Authentication rejected"
+                }
+                
+        except Exception as e:
+            logger.error(f"TACACS+ authentication error: {e}")
+            
+            # Try secondary server if available
+            if server_config.get("secondary_host"):
+                try:
+                    client = TACACSClient(
+                        host=server_config.get("secondary_host"),
+                        port=server_config.get("secondary_port", 49),
+                        secret=server_config.get("shared_secret", ""),
+                        timeout=server_config.get("timeout", 5)
+                    )
+                    auth = client.authenticate(
+                        username,
+                        password,
+                        authen_type=TAC_PLUS_AUTHEN_TYPE_ASCII
+                    )
+                    
+                    if auth.valid:
+                        return {
+                            "success": True,
+                            "method": "tacacs",
+                            "server": server_config.get("secondary_host"),
+                            "message": "Authentication successful (secondary)"
+                        }
+                except Exception as e2:
+                    logger.error(f"TACACS+ secondary auth error: {e2}")
+            
+            return {
+                "success": False,
+                "method": "tacacs",
+                "error": str(e),
+                "message": "TACACS+ server unreachable"
+            }
+    
+    @staticmethod
+    async def authenticate(username: str, password: str) -> dict:
+        """Authenticate user against configured AAA servers"""
+        # Get active AAA configs
+        aaa_configs = await db.aaa_config.find({"is_active": True}, {"_id": 0}).to_list(10)
+        
+        if not aaa_configs:
+            return {"success": False, "error": "No AAA servers configured", "fallback_to_local": True}
+        
+        for config in aaa_configs:
+            if not config.get("use_for_login", True):
+                continue
+            
+            server_type = config.get("server_type", "radius").lower()
+            
+            if server_type == "radius":
+                result = await AAAService.authenticate_radius(username, password, config)
+            elif server_type == "tacacs":
+                result = await AAAService.authenticate_tacacs(username, password, config)
+            else:
+                continue
+            
+            if result.get("success"):
+                return result
+        
+        return {"success": False, "error": "AAA authentication failed", "fallback_to_local": True}
+
+aaa_service = AAAService()
+
+# AAA Router
+aaa_router = APIRouter(prefix="/aaa", tags=["AAA"])
+
+@aaa_router.post("/test")
+async def test_aaa_connection(
+    config_id: str,
+    test_username: Optional[str] = None,
+    test_password: Optional[str] = None,
+    current_user: dict = Depends(get_current_user)
+):
+    """Test AAA server connection"""
+    if current_user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required")
+    
+    config = await db.aaa_config.find_one({"id": config_id}, {"_id": 0})
+    if not config:
+        raise HTTPException(status_code=404, detail="AAA config not found")
+    
+    # Test connectivity
+    server_type = config.get("server_type", "radius").lower()
+    host = config.get("primary_host")
+    port = config.get("primary_port", 1812 if server_type == "radius" else 49)
+    
+    import socket
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.settimeout(5)
+        result = sock.connect_ex((host, port))
+        sock.close()
+        
+        connectivity = result == 0
+    except Exception as e:
+        connectivity = False
+    
+    response = {
+        "server_type": server_type,
+        "host": host,
+        "port": port,
+        "connectivity": connectivity,
+        "connectivity_message": "Server reachable" if connectivity else "Server unreachable"
+    }
+    
+    # If test credentials provided, try authentication
+    if test_username and test_password:
+        if server_type == "radius":
+            auth_result = await aaa_service.authenticate_radius(test_username, test_password, config)
+        else:
+            auth_result = await aaa_service.authenticate_tacacs(test_username, test_password, config)
+        response["authentication_test"] = auth_result
+    
+    await create_audit_log(
+        action_type=AuditLogType.AAA_AUTH.value,
+        description=f"Tested AAA server connection: {host}",
+        user=current_user,
+        resource_type="aaa_config",
+        resource_id=config_id,
+        details={"server_type": server_type, "connectivity": connectivity}
+    )
+    
+    return response
+
+@aaa_router.post("/authenticate")
+async def aaa_authenticate(
+    username: str,
+    password: str,
+    current_user: dict = Depends(get_current_user)
+):
+    """Authenticate a user/device against AAA servers"""
+    result = await aaa_service.authenticate(username, password)
+    
+    await create_audit_log(
+        action_type=AuditLogType.AAA_AUTH.value,
+        description=f"AAA authentication attempt for {username}",
+        user=current_user,
+        details={"username": username, "success": result.get("success"), "method": result.get("method")},
+        success=result.get("success", False)
+    )
+    
+    return result
+
+# Include new routers
+api_router.include_router(audit_router)
+api_router.include_router(backup_router)
+api_router.include_router(aaa_router)
 
 app.include_router(api_router)
 

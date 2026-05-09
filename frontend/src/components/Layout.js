@@ -27,7 +27,9 @@ import {
   Cog,
   Search,
   LayoutGrid,
-  Users
+  Users,
+  Database,
+  Shield
 } from 'lucide-react';
 
 const AMEYA_LOGO_URL = "https://customer-assets.emergentagent.com/job_network-ops-ai/artifacts/vjap12f5_Atechlogo.jpeg";
@@ -38,6 +40,7 @@ const navItems = [
   { path: '/monitoring', label: 'Monitoring', icon: Monitor },
   { path: '/topology', label: 'Network Topology', icon: Network },
   { path: '/network-discovery', label: 'Network Discovery', icon: Search },
+  { path: '/config-backup', label: 'Config Backup', icon: Database },
   { path: '/alerts', label: 'Alerts', icon: Bell },
   { path: '/incidents', label: 'Incidents', icon: FileWarning },
   { path: '/performance', label: 'Performance', icon: Activity },
@@ -49,6 +52,7 @@ const navItems = [
   { path: '/configuration', label: 'Configuration', icon: Settings },
   { path: '/sla', label: 'SLA Management', icon: Target },
   { path: '/user-management', label: 'User Management', icon: Users, adminOnly: true },
+  { path: '/audit-logs', label: 'Audit Logs', icon: Shield, adminOnly: true },
   { path: '/settings', label: 'Settings', icon: Cog },
 ];
 

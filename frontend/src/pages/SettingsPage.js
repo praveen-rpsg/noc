@@ -745,6 +745,24 @@ export default function SettingsPage() {
     }
   };
 
+  // Test AAA connection
+  const [testingAAA, setTestingAAA] = useState({});
+  const handleTestAAAConnection = async (configId) => {
+    setTestingAAA(prev => ({...prev, [configId]: true}));
+    try {
+      const response = await axios.post(`${API}/aaa/test?config_id=${configId}`, {}, { headers: getAuthHeader() });
+      if (response.data.connectivity) {
+        toast.success(`${response.data.server_type?.toUpperCase()} server is reachable at ${response.data.host}:${response.data.port}`);
+      } else {
+        toast.error(`Cannot reach ${response.data.host}:${response.data.port}`);
+      }
+    } catch (error) {
+      toast.error(error.response?.data?.detail || 'Failed to test AAA connection');
+    } finally {
+      setTestingAAA(prev => ({...prev, [configId]: false}));
+    }
+  };
+
   // Config card component
   const ConfigCard = ({ config, type, icon: Icon, iconColor, children }) => (
     <div className="border rounded-lg p-4 flex items-start justify-between hover:bg-muted/30 transition-colors">
@@ -1443,19 +1461,60 @@ export default function SettingsPage() {
             <CardHeader className="flex flex-row items-center justify-between">
               <div>
                 <CardTitle className="flex items-center gap-2"><Key className="h-5 w-5 text-yellow-600" />AAA Server Configuration</CardTitle>
-                <CardDescription>Configure RADIUS and TACACS+ authentication servers</CardDescription>
+                <CardDescription>Configure RADIUS and TACACS+ authentication servers for user login and device authentication</CardDescription>
               </div>
               <Button onClick={() => openCreateDialog('aaa', {server_type: 'radius', primary_port: 1812, use_for_login: true, use_for_device_auth: true})}><Plus className="h-4 w-4 mr-2" />Add</Button>
             </CardHeader>
             <CardContent>
               {aaa.configs.length === 0 ? (
-                <div className="text-center py-8 text-muted-foreground">No AAA server configurations</div>
+                <div className="text-center py-8 text-muted-foreground">
+                  <Key className="h-12 w-12 mx-auto mb-4 opacity-50" />
+                  <p>No AAA server configurations</p>
+                  <p className="text-sm">Add RADIUS or TACACS+ servers for centralized authentication</p>
+                </div>
               ) : (
                 <div className="space-y-3">
                   {aaa.configs.map(config => (
-                    <ConfigCard key={config.id} config={config} type="aaa" icon={Key} iconColor="bg-yellow-500">
-                      <p className="text-sm text-muted-foreground">{config.server_type?.toUpperCase()} | Primary: {config.primary_host}:{config.primary_port}</p>
-                    </ConfigCard>
+                    <div key={config.id} className="border rounded-lg p-4 flex items-start justify-between hover:bg-muted/30 transition-colors">
+                      <div className="flex items-start gap-3">
+                        <div className="p-2 rounded-lg bg-yellow-500">
+                          <Key className="h-5 w-5 text-white" />
+                        </div>
+                        <div className="space-y-1">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <h4 className="font-medium">{config.name}</h4>
+                            <Badge variant="outline">{config.server_type?.toUpperCase()}</Badge>
+                            {config.is_active && <Badge className="bg-green-500">Active</Badge>}
+                            {config.use_for_login && <Badge className="bg-blue-500">Login Auth</Badge>}
+                            {config.use_for_device_auth && <Badge className="bg-purple-500">Device Auth</Badge>}
+                          </div>
+                          <p className="text-sm text-muted-foreground">
+                            Primary: {config.primary_host}:{config.primary_port}
+                            {config.secondary_host && ` | Secondary: ${config.secondary_host}:${config.secondary_port || config.primary_port}`}
+                          </p>
+                          <p className="text-xs text-muted-foreground">
+                            Timeout: {config.timeout || 5}s | Retries: {config.retries || 3}
+                          </p>
+                        </div>
+                      </div>
+                      <div className="flex gap-2">
+                        <Button 
+                          variant="outline" 
+                          size="icon" 
+                          onClick={() => handleTestAAAConnection(config.id)}
+                          disabled={testingAAA[config.id]}
+                          title="Test Connection"
+                        >
+                          {testingAAA[config.id] ? <Loader2 className="h-4 w-4 animate-spin" /> : <TestTube className="h-4 w-4 text-green-500" />}
+                        </Button>
+                        <Button variant="outline" size="icon" onClick={() => openEditDialog('aaa', config)}>
+                          <Edit className="h-4 w-4" />
+                        </Button>
+                        <Button variant="outline" size="icon" onClick={() => handleDeleteConfig('aaa', config.id)}>
+                          <Trash2 className="h-4 w-4 text-red-500" />
+                        </Button>
+                      </div>
+                    </div>
                   ))}
                 </div>
               )}
