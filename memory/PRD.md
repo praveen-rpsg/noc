@@ -260,10 +260,37 @@ A comprehensive NOC (Network Operation Center) tool where AI agents act as NOC e
 - ✅ **Login**: Verified working with dynamic backend URL
 - ✅ **Registration**: Verified working - new users auto-login after registration
 
-## New Settings Tabs (Phase 6 & 9)
+### Phase 10 - License Activation System (2026-05-09)
+
+#### 1. Application Licensing
+- ✅ **Activation Page**: Full-screen activation page shown before login
+- ✅ **License Check**: App checks license status on startup
+- ✅ **Single-Use Codes**: Format: ATECH-XXXX-XXXX-XXXX
+- ✅ **Permanent Activation**: Once activated, never expires
+- ✅ **Instance ID**: Unique ID generated per activation
+
+#### 2. Admin Code Management (Settings → License)
+- ✅ **Generate Codes**: Create 1-100 codes at once with optional notes
+- ✅ **Code Statistics**: Total, Available, Used, Revoked counts
+- ✅ **Code Table**: View all codes with status, date, notes
+- ✅ **Copy to Clipboard**: One-click copy activation codes
+- ✅ **Revoke Codes**: Disable unused codes
+- ✅ **Delete Codes**: Remove unused codes
+
+#### 3. API Endpoints
+- `GET /api/license/status` - Check activation status (public)
+- `POST /api/license/activate` - Activate with code (public)
+- `GET /api/settings/activation-codes` - List all codes (admin)
+- `POST /api/settings/activation-codes/generate` - Generate codes (admin)
+- `DELETE /api/settings/activation-codes/{id}` - Delete code (admin)
+- `PUT /api/settings/activation-codes/{id}/revoke` - Revoke code (admin)
+- `GET /api/settings/activation-codes/stats` - Get statistics (admin)
+
+## New Settings Tabs (Phase 6, 9 & 10)
 | Tab | Purpose |
 |-----|---------|
-| Connection | Backend URL configuration (NEW) |
+| Connection | Backend URL configuration |
+| License | Activation code generation & management (Admin only) |
 | Email | Office 365 SMTP configuration |
 | SNMP | v1/v2c community strings, v3 with auth/privacy |
 | OpenStack | Cloud infrastructure monitoring |

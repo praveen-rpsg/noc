@@ -23,7 +23,7 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 
 from agents import (
-    generate_activation_codes, Agent, AgentCreate, AgentUpdate,
+    generate_activation_codes, generate_activation_code, Agent, AgentCreate, AgentUpdate,
     ActivationCode, EscalationContact, EscalationContactCreate, ESCALATION_LEVELS
 )
 
@@ -57,6 +57,82 @@ app = FastAPI(title="ATECH NOC Commander API", version="2.0.0")
 @app.get("/api/health")
 async def health_check():
     return {"status": "healthy", "version": "2.0.0", "service": "ATECH NOC Commander"}
+
+# License activation status check (public endpoint)
+@app.get("/api/license/status")
+async def get_license_status():
+    """Check if the application is activated"""
+    license_doc = await db.app_license.find_one({"type": "application_license"})
+    if license_doc and license_doc.get("is_activated"):
+        return {
+            "is_activated": True,
+            "activated_at": license_doc.get("activated_at"),
+            "activation_code": license_doc.get("activation_code"),
+            "instance_id": license_doc.get("instance_id")
+        }
+    return {"is_activated": False}
+
+# Activate application with code (public endpoint)
+@app.post("/api/license/activate")
+async def activate_application(data: dict):
+    """Activate the application with a valid activation code"""
+    activation_code = data.get("activation_code", "").strip().upper()
+    
+    if not activation_code:
+        raise HTTPException(status_code=400, detail="Activation code is required")
+    
+    # Check if already activated
+    existing_license = await db.app_license.find_one({"type": "application_license"})
+    if existing_license and existing_license.get("is_activated"):
+        raise HTTPException(status_code=400, detail="Application is already activated")
+    
+    # Find the activation code
+    code_doc = await db.activation_codes.find_one({"code": activation_code})
+    
+    if not code_doc:
+        raise HTTPException(status_code=404, detail="Invalid activation code")
+    
+    if code_doc.get("status") == "used":
+        raise HTTPException(status_code=400, detail="This activation code has already been used")
+    
+    if code_doc.get("status") == "revoked":
+        raise HTTPException(status_code=400, detail="This activation code has been revoked")
+    
+    # Generate instance ID
+    instance_id = str(uuid.uuid4())
+    now = datetime.now(timezone.utc).isoformat()
+    
+    # Mark code as used
+    await db.activation_codes.update_one(
+        {"_id": code_doc["_id"]},
+        {"$set": {
+            "status": "used",
+            "used_at": now,
+            "instance_id": instance_id
+        }}
+    )
+    
+    # Create or update application license
+    license_data = {
+        "type": "application_license",
+        "is_activated": True,
+        "activation_code": activation_code,
+        "activated_at": now,
+        "instance_id": instance_id
+    }
+    
+    await db.app_license.update_one(
+        {"type": "application_license"},
+        {"$set": license_data},
+        upsert=True
+    )
+    
+    return {
+        "success": True,
+        "message": "Application activated successfully",
+        "instance_id": instance_id,
+        "activated_at": now
+    }
 
 # WebSocket connections for real-time alerts
 class ConnectionManager:
@@ -4035,6 +4111,117 @@ async def get_dashboard_templates(current_user: dict = Depends(get_current_user)
         }
     ]
     return templates
+
+# ===================== ACTIVATION CODE MANAGEMENT (Admin Only) =====================
+
+class ActivationCodeCreate(BaseModel):
+    """Model for creating activation codes"""
+    count: int = Field(default=1, ge=1, le=100)
+    notes: Optional[str] = None
+
+class ActivationCodeResponse(BaseModel):
+    """Model for activation code response"""
+    id: str
+    code: str
+    status: str
+    created_at: str
+    created_by: str
+    notes: Optional[str] = None
+    used_at: Optional[str] = None
+    instance_id: Optional[str] = None
+
+@settings_router.get("/activation-codes")
+async def get_activation_codes(current_user: dict = Depends(get_current_user)):
+    """Get all activation codes (Admin only)"""
+    if current_user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required")
+    
+    codes = await db.activation_codes.find({}, {"_id": 0}).sort("created_at", -1).to_list(1000)
+    return codes
+
+@settings_router.post("/activation-codes/generate")
+async def generate_activation_codes_endpoint(
+    data: ActivationCodeCreate,
+    current_user: dict = Depends(get_current_user)
+):
+    """Generate new activation codes (Admin only)"""
+    if current_user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required")
+    
+    codes = []
+    now = datetime.now(timezone.utc).isoformat()
+    
+    for _ in range(data.count):
+        code = generate_activation_code()
+        code_doc = {
+            "id": str(uuid.uuid4()),
+            "code": code,
+            "status": "available",
+            "created_at": now,
+            "created_by": current_user.get("email"),
+            "notes": data.notes,
+            "used_at": None,
+            "instance_id": None
+        }
+        await db.activation_codes.insert_one(code_doc)
+        code_copy = {k: v for k, v in code_doc.items() if k != "_id"}
+        codes.append(code_copy)
+    
+    return {
+        "success": True,
+        "message": f"Generated {data.count} activation code(s)",
+        "codes": codes
+    }
+
+@settings_router.delete("/activation-codes/{code_id}")
+async def delete_activation_code(code_id: str, current_user: dict = Depends(get_current_user)):
+    """Delete an unused activation code (Admin only)"""
+    if current_user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required")
+    
+    code = await db.activation_codes.find_one({"id": code_id})
+    if not code:
+        raise HTTPException(status_code=404, detail="Activation code not found")
+    
+    if code.get("status") == "used":
+        raise HTTPException(status_code=400, detail="Cannot delete a used activation code")
+    
+    await db.activation_codes.delete_one({"id": code_id})
+    return {"success": True, "message": "Activation code deleted"}
+
+@settings_router.put("/activation-codes/{code_id}/revoke")
+async def revoke_activation_code(code_id: str, current_user: dict = Depends(get_current_user)):
+    """Revoke an activation code (Admin only)"""
+    if current_user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required")
+    
+    code = await db.activation_codes.find_one({"id": code_id})
+    if not code:
+        raise HTTPException(status_code=404, detail="Activation code not found")
+    
+    await db.activation_codes.update_one(
+        {"id": code_id},
+        {"$set": {"status": "revoked", "revoked_at": datetime.now(timezone.utc).isoformat()}}
+    )
+    return {"success": True, "message": "Activation code revoked"}
+
+@settings_router.get("/activation-codes/stats")
+async def get_activation_codes_stats(current_user: dict = Depends(get_current_user)):
+    """Get activation code statistics (Admin only)"""
+    if current_user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required")
+    
+    total = await db.activation_codes.count_documents({})
+    available = await db.activation_codes.count_documents({"status": "available"})
+    used = await db.activation_codes.count_documents({"status": "used"})
+    revoked = await db.activation_codes.count_documents({"status": "revoked"})
+    
+    return {
+        "total": total,
+        "available": available,
+        "used": used,
+        "revoked": revoked
+    }
 
 # ===================== AI INCIDENT RESOLUTION =====================
 @ai_router.post("/incidents/{incident_id}/analyze")

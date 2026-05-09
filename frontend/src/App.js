@@ -1,13 +1,15 @@
-import React from "react";
+import React, { useState, useEffect } from "react";
 import "@/App.css";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { AuthProvider, useAuth } from "./context/AuthContext";
 import { Toaster } from "./components/ui/sonner";
 import { MainLayout } from "./components/Layout";
 import { VoiceAlertProvider, VoiceSettingsDialog } from "./components/VoiceAlertService";
+import { getBackendUrlSync, initConfig } from "./services/config";
 
 // Pages
 import LoginPage from "./pages/LoginPage";
+import ActivationPage from "./pages/ActivationPage";
 import DashboardPage from "./pages/DashboardPage";
 import MonitoringPage from "./pages/MonitoringPage";
 import TopologyPage from "./pages/TopologyPage";
@@ -22,6 +24,34 @@ import SLAPage from "./pages/SLAPage";
 import AgentsPage from "./pages/AgentsPage";
 import EscalationPage from "./pages/EscalationPage";
 import SettingsPage from "./pages/SettingsPage";
+
+// License check hook
+const useLicenseStatus = () => {
+  const [isActivated, setIsActivated] = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  const checkLicense = async () => {
+    try {
+      await initConfig();
+      const API_URL = getBackendUrlSync();
+      const response = await fetch(`${API_URL}/api/license/status`);
+      const data = await response.json();
+      setIsActivated(data.is_activated === true);
+    } catch (error) {
+      console.error('Failed to check license:', error);
+      // If we can't connect, assume not activated
+      setIsActivated(false);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    checkLicense();
+  }, []);
+
+  return { isActivated, loading, recheckLicense: checkLicense };
+};
 
 const ProtectedRoute = ({ children }) => {
   const { user, loading } = useAuth();
@@ -60,6 +90,25 @@ const PublicRoute = ({ children }) => {
 };
 
 function AppRoutes() {
+  const { isActivated, loading: licenseLoading, recheckLicense } = useLicenseStatus();
+
+  // Show loading while checking license
+  if (licenseLoading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-background">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary mx-auto mb-4"></div>
+          <p className="text-muted-foreground">Checking license...</p>
+        </div>
+      </div>
+    );
+  }
+
+  // Show activation page if not activated
+  if (!isActivated) {
+    return <ActivationPage onActivated={recheckLicense} />;
+  }
+
   return (
     <Routes>
       <Route
