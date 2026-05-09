@@ -396,10 +396,44 @@ Device:
 2. 🟢 ~~Connect to real OpenStack/Oracle/vCenter APIs~~ DONE
 3. 🟢 ~~Implement real SSH connections for device configuration~~ DONE
 4. 🟢 ~~Real-time device discovery on network~~ DONE
-5. 🟡 Build drag-drop dashboard editor UI
-6. 🟡 Mobile responsive design
-7. 🟡 Audit logging
-8. 🟡 Real Office 365 email dispatch for SOS alerts
+5. 🟢 ~~Build drag-drop dashboard editor UI~~ DONE
+6. 🟢 ~~Real Office 365 email dispatch for SOS alerts~~ DONE (MS Graph + SMTP)
+7. 🟢 ~~Role-based user management (Admin/Operator)~~ DONE
+8. 🟡 Mobile responsive design
+9. 🟡 Audit logging
+10. 🟡 Real Backup/Restore via SSH/API execution
+11. 🟡 Real AAA Authentication (RADIUS/TACACS+)
+
+### Phase 12 - Dashboard & User Management (May 2026)
+
+#### 1. Drag & Drop Dashboard Editor
+- ✅ **react-grid-layout** integration for draggable/resizable widgets
+- ✅ **8 Widget Types**: Device Status, Active Alerts Chart, Incident Trends, Topology Mini-Map, Performance Metrics, Recent Activity, SLA Compliance, Custom Metric
+- ✅ **Edit Mode**: Toggle edit mode to drag/resize widgets
+- ✅ **Personal Layouts**: Each user can customize their dashboard
+- ✅ **Global Layouts**: Admins can save layouts for all users
+- ✅ **Widget Management**: Add/Remove widgets, reset to default
+- API: `GET/POST /api/dashboard/layout`
+
+#### 2. Role-Based User Management
+- ✅ **Admin Role**: Full system access (users, licenses, settings)
+- ✅ **Operator Role**: Operational access (incidents, alerts, devices)
+- ✅ **Admin-Only Page**: User Management page visible only to admins
+- ✅ **User CRUD**: Create, edit, delete users
+- ✅ **Password Reset**: Admin can reset user passwords
+- ✅ **Enable/Disable Users**: Toggle user active status
+- ✅ **Search & Filter**: Search by name/email, filter by role
+- ✅ **Stats Dashboard**: Total users, administrators, operators, active users
+- API: `GET/POST/PUT/DELETE /api/users`
+
+#### 3. Office 365 Email Integration
+- ✅ **MS Graph API Configuration**: Tenant ID, Client ID, Client Secret
+- ✅ **Secure Storage**: Credentials stored in MongoDB
+- ✅ **Test Email**: Send test email to verify configuration
+- ✅ **SMTP Fallback**: Falls back to SMTP if MS Graph not configured
+- ✅ **Azure Portal Link**: Direct link to get credentials
+- ✅ **Permissions Note**: Shows required Mail.Send permission
+- API: `GET/POST/DELETE /api/settings/o365`, `POST /api/settings/o365/test`
 
 ## Standalone Installation Tested (April 2026)
 - ✅ Login/Registration working
