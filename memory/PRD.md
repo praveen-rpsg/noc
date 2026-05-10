@@ -402,7 +402,10 @@ Device:
 8. 🟢 ~~Real Backup/Restore via SSH with config fetch~~ DONE
 9. 🟢 ~~Real AAA Authentication (RADIUS/TACACS+)~~ DONE
 10. 🟢 ~~Audit logging for compliance (90-day retention)~~ DONE
-11. 🟡 Mobile responsive design
+11. 🟢 ~~Enhanced Reports (Daily Health, Incidents, Inventory)~~ DONE (May 2026)
+12. 🟢 ~~Asset Auto-registration from Network Discovery~~ DONE (May 2026)
+13. 🟡 Mobile responsive design
+14. 🟡 Complete httpOnly cookie transition for session management
 
 ### Phase 13 - Config Backup, AAA, Audit Logging (May 2026)
 
@@ -533,5 +536,47 @@ Output installers will be in `frontend/dist/` folder.
 - `/app/frontend/src/pages/MonitoringPage.js` - Added getUsageColorClass helper
 - `/app/frontend/src/pages/TopologyPage.js` - Fixed empty catch block
 - `/app/backend/server.py` - Fixed comparison anti-patterns
+
+
+### Phase 15 - Enhanced Reports & Asset Auto-registration (May 2026)
+
+#### 1. Enhanced Report Generation
+- ✅ **Daily Health Reports** with detailed metrics:
+  - CPU usage (percent, status: Normal/Warning/Critical)
+  - Memory usage (percent, status, dead_memory_percent)
+  - Traffic metrics (in/out Mbps, peak traffic)
+  - Interface status (total, up, down, admin_down, free, utilization %)
+  - Health Summary (total devices, online, critical alerts, health score)
+  - Recommendations based on device health
+- ✅ **Incident Reports** with RCA and hardware analysis:
+  - Suggested Root Cause Analysis (AI-generated)
+  - Hardware Replacement Required (Possible/Not Required)
+  - IOS Bug Report (Check Cisco Bug Search/N/A)
+  - Incident categorization (Performance, Connectivity, Hardware, etc.)
+  - MTTR calculation (Mean Time To Resolution)
+  - Trending incident categories
+- ✅ **Device Inventory Reports** with OEM and warranty tracking:
+  - OEM vendor details
+  - Location details (building, floor, rack_position)
+  - Warranty status (Active, Expiring Soon, Expired, Unknown)
+  - By-vendor breakdown
+  - By-location breakdown
+  - Warranty alerts for expired/expiring assets
+
+#### 2. Asset Auto-registration from Network Discovery
+- ✅ **Dual-Collection Insert**: Discovered devices automatically added to both `devices` (monitoring) and `assets` (inventory) collections
+- ✅ **Device-Asset Linking**: Assets include `device_id` field linking to the monitoring device record
+- ✅ **Auto-Generated Asset Tags**: Format: `DISC-{IP}-{timestamp}`
+- ✅ **Discovery Fields**: Assets track `auto_discovered`, `discovery_method`, `ip_address`, `mac_address`
+- ✅ **Duplicate Prevention**: Checks for existing devices by IP or MAC before insert/update
+- ✅ **Audit Logging**: All discovery actions logged with device details
+
+#### 3. Frontend Report Preview
+- ✅ **Enhanced Preview Dialog**: Reports page preview shows full enhanced content
+- ✅ **Daily Health Preview**: Health Summary cards + Device Health Details table with all metrics
+- ✅ **Incident Preview**: Incident Summary cards + Incident cards with RCA, hardware, bug fields
+- ✅ **Inventory Preview**: Inventory Summary cards + Asset table with OEM, location, warranty columns
+- ✅ **Download Options**: PDF and CSV download buttons in preview dialog
+
 - `/app/backend/agents.py` - Secure random for activation codes
 - `/app/backend/tests/*.py` - Environment variable credentials
