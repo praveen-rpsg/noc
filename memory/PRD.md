@@ -269,22 +269,18 @@ A comprehensive NOC (Network Operation Center) tool where AI agents act as NOC e
 - ✅ **Permanent Activation**: Once activated, never expires
 - ✅ **Instance ID**: Unique ID generated per activation
 
-#### 2. Admin Code Management (Settings → License)
-- ✅ **Generate Codes**: Create 1-100 codes at once with optional notes
-- ✅ **Code Statistics**: Total, Available, Used, Revoked counts
-- ✅ **Code Table**: View all codes with status, date, notes
+#### 2. License Viewing (Settings → License) - Updated May 2026
+- ✅ **Application License Status**: Shows current app activation status, code, date, instance ID
+- ✅ **Activated Licenses Only**: License tab only displays used/activated licenses
 - ✅ **Copy to Clipboard**: One-click copy activation codes
-- ✅ **Revoke Codes**: Disable unused codes
-- ✅ **Delete Codes**: Remove unused codes
+- ❌ **Generate Codes**: Removed from Settings UI (codes generated separately)
+- ❌ **Code Statistics**: Removed from Settings UI
+- ❌ **Revoke/Delete Codes**: Removed from Settings UI
 
 #### 3. API Endpoints
 - `GET /api/license/status` - Check activation status (public)
 - `POST /api/license/activate` - Activate with code (public)
-- `GET /api/settings/activation-codes` - List all codes (admin)
-- `POST /api/settings/activation-codes/generate` - Generate codes (admin)
-- `DELETE /api/settings/activation-codes/{id}` - Delete code (admin)
-- `PUT /api/settings/activation-codes/{id}/revoke` - Revoke code (admin)
-- `GET /api/settings/activation-codes/stats` - Get statistics (admin)
+- `GET /api/settings/activation-codes` - List all codes (admin) - Used to filter for activated only
 
 ### Phase 11 - Real Network Services (2026-05-09)
 

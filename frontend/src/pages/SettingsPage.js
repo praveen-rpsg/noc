@@ -230,99 +230,41 @@ function ConnectionSettings() {
   );
 }
 
-// License Settings Component (Admin Only)
+// License Settings Component (Admin Only) - Shows only activated licenses
 function LicenseSettings() {
   const { user } = useAuth();
-  const [codes, setCodes] = useState([]);
-  const [stats, setStats] = useState({ total: 0, available: 0, used: 0, revoked: 0 });
+  const [licenseInfo, setLicenseInfo] = useState(null);
+  const [usedCodes, setUsedCodes] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [generating, setGenerating] = useState(false);
-  const [generateCount, setGenerateCount] = useState(1);
-  const [showGenerateDialog, setShowGenerateDialog] = useState(false);
-  const [notes, setNotes] = useState('');
 
   const isAdmin = user?.role === 'admin';
 
-  const fetchCodes = useCallback(async () => {
+  const fetchLicenseInfo = useCallback(async () => {
     if (!isAdmin) return;
     try {
       const API = getApiUrl();
-      const [codesRes, statsRes] = await Promise.all([
-        axios.get(`${API}/settings/activation-codes`, { headers: getAuthHeader() }),
-        axios.get(`${API}/settings/activation-codes/stats`, { headers: getAuthHeader() })
-      ]);
-      setCodes(codesRes.data);
-      setStats(statsRes.data);
+      // Fetch current app license status
+      const licenseRes = await axios.get(`${API}/license/status`);
+      setLicenseInfo(licenseRes.data);
+      
+      // Fetch only used activation codes
+      const codesRes = await axios.get(`${API}/settings/activation-codes`, { headers: getAuthHeader() });
+      const usedOnly = codesRes.data.filter(code => code.status === 'used');
+      setUsedCodes(usedOnly);
     } catch (error) {
-      console.error('Failed to fetch activation codes:', error);
+      console.error('Failed to fetch license info:', error);
     } finally {
       setLoading(false);
     }
   }, [isAdmin]);
 
   useEffect(() => {
-    fetchCodes();
-  }, [fetchCodes]);
-
-  const handleGenerate = async () => {
-    setGenerating(true);
-    try {
-      const API = getApiUrl();
-      const response = await axios.post(`${API}/settings/activation-codes/generate`, {
-        count: generateCount,
-        notes: notes || null
-      }, { headers: getAuthHeader() });
-      
-      toast.success(`Generated ${response.data.codes.length} activation code(s)`);
-      setShowGenerateDialog(false);
-      setNotes('');
-      setGenerateCount(1);
-      fetchCodes();
-    } catch (error) {
-      toast.error(error.response?.data?.detail || 'Failed to generate codes');
-    } finally {
-      setGenerating(false);
-    }
-  };
+    fetchLicenseInfo();
+  }, [fetchLicenseInfo]);
 
   const handleCopy = (code) => {
     navigator.clipboard.writeText(code);
     toast.success('Code copied to clipboard');
-  };
-
-  const handleRevoke = async (codeId) => {
-    try {
-      const API = getApiUrl();
-      await axios.put(`${API}/settings/activation-codes/${codeId}/revoke`, {}, { headers: getAuthHeader() });
-      toast.success('Activation code revoked');
-      fetchCodes();
-    } catch (error) {
-      toast.error(error.response?.data?.detail || 'Failed to revoke code');
-    }
-  };
-
-  const handleDelete = async (codeId) => {
-    try {
-      const API = getApiUrl();
-      await axios.delete(`${API}/settings/activation-codes/${codeId}`, { headers: getAuthHeader() });
-      toast.success('Activation code deleted');
-      fetchCodes();
-    } catch (error) {
-      toast.error(error.response?.data?.detail || 'Failed to delete code');
-    }
-  };
-
-  const getStatusBadge = (status) => {
-    switch (status) {
-      case 'available':
-        return <Badge className="bg-green-100 text-green-700 border-green-300">Available</Badge>;
-      case 'used':
-        return <Badge className="bg-blue-100 text-blue-700 border-blue-300">Used</Badge>;
-      case 'revoked':
-        return <Badge className="bg-red-100 text-red-700 border-red-300">Revoked</Badge>;
-      default:
-        return <Badge variant="outline">{status}</Badge>;
-    }
   };
 
   if (!isAdmin) {
@@ -331,7 +273,7 @@ function LicenseSettings() {
         <CardContent className="pt-6">
           <div className="flex items-center justify-center gap-2 text-muted-foreground">
             <Shield className="h-5 w-5" />
-            <span>Admin access required to manage activation codes</span>
+            <span>Admin access required to view license information</span>
           </div>
         </CardContent>
       </Card>
@@ -345,171 +287,129 @@ function LicenseSettings() {
           <div>
             <CardTitle className="flex items-center gap-2">
               <Key className="h-5 w-5 text-blue-600" />
-              License & Activation Codes
+              License Information
             </CardTitle>
             <CardDescription>
-              Generate and manage activation codes for new installations
+              View activated licenses for this application
             </CardDescription>
           </div>
-          <Button onClick={() => setShowGenerateDialog(true)} data-testid="generate-codes-btn">
-            <Plus className="h-4 w-4 mr-2" />
-            Generate Codes
+          <Button variant="outline" onClick={fetchLicenseInfo}>
+            <RefreshCw className="h-4 w-4 mr-2" />
+            Refresh
           </Button>
         </div>
       </CardHeader>
       <CardContent className="space-y-6">
-        {/* Stats */}
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-          <div className="bg-slate-50 p-4 rounded-lg text-center">
-            <div className="text-2xl font-bold">{stats.total}</div>
-            <div className="text-sm text-muted-foreground">Total Codes</div>
+        {loading ? (
+          <div className="p-8 text-center">
+            <Loader2 className="h-6 w-6 animate-spin mx-auto text-muted-foreground" />
           </div>
-          <div className="bg-green-50 p-4 rounded-lg text-center">
-            <div className="text-2xl font-bold text-green-700">{stats.available}</div>
-            <div className="text-sm text-green-600">Available</div>
-          </div>
-          <div className="bg-blue-50 p-4 rounded-lg text-center">
-            <div className="text-2xl font-bold text-blue-700">{stats.used}</div>
-            <div className="text-sm text-blue-600">Used</div>
-          </div>
-          <div className="bg-red-50 p-4 rounded-lg text-center">
-            <div className="text-2xl font-bold text-red-700">{stats.revoked}</div>
-            <div className="text-sm text-red-600">Revoked</div>
-          </div>
-        </div>
-
-        {/* Codes Table */}
-        <div className="border rounded-lg overflow-hidden">
-          <div className="bg-slate-50 px-4 py-3 border-b flex items-center justify-between">
-            <span className="font-medium">Activation Codes</span>
-            <Button variant="ghost" size="sm" onClick={fetchCodes}>
-              <RefreshCw className="h-4 w-4" />
-            </Button>
-          </div>
-          
-          {loading ? (
-            <div className="p-8 text-center">
-              <Loader2 className="h-6 w-6 animate-spin mx-auto text-muted-foreground" />
-            </div>
-          ) : codes.length === 0 ? (
-            <div className="p-8 text-center text-muted-foreground">
-              No activation codes generated yet
-            </div>
-          ) : (
-            <ScrollArea className="h-[400px]">
-              <table className="w-full">
-                <thead className="bg-slate-50 sticky top-0">
-                  <tr>
-                    <th className="text-left px-4 py-2 text-sm font-medium">Code</th>
-                    <th className="text-left px-4 py-2 text-sm font-medium">Status</th>
-                    <th className="text-left px-4 py-2 text-sm font-medium">Created</th>
-                    <th className="text-left px-4 py-2 text-sm font-medium">Notes</th>
-                    <th className="text-right px-4 py-2 text-sm font-medium">Actions</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y">
-                  {codes.map((code) => (
-                    <tr key={code.id} className="hover:bg-slate-50/50">
-                      <td className="px-4 py-3">
-                        <code className="bg-slate-100 px-2 py-1 rounded text-sm font-mono">
-                          {code.code}
-                        </code>
-                      </td>
-                      <td className="px-4 py-3">{getStatusBadge(code.status)}</td>
-                      <td className="px-4 py-3 text-sm text-muted-foreground">
-                        {new Date(code.created_at).toLocaleDateString()}
-                      </td>
-                      <td className="px-4 py-3 text-sm text-muted-foreground">
-                        {code.notes || '-'}
-                      </td>
-                      <td className="px-4 py-3">
-                        <div className="flex items-center justify-end gap-1">
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => handleCopy(code.code)}
-                            title="Copy code"
-                          >
-                            <Copy className="h-4 w-4" />
-                          </Button>
-                          {code.status === 'available' && (
-                            <>
-                              <Button
-                                variant="ghost"
-                                size="sm"
-                                onClick={() => handleRevoke(code.id)}
-                                title="Revoke code"
-                                className="text-orange-600 hover:text-orange-700"
-                              >
-                                <Ban className="h-4 w-4" />
-                              </Button>
-                              <Button
-                                variant="ghost"
-                                size="sm"
-                                onClick={() => handleDelete(code.id)}
-                                title="Delete code"
-                                className="text-red-600 hover:text-red-700"
-                              >
-                                <Trash2 className="h-4 w-4" />
-                              </Button>
-                            </>
-                          )}
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </ScrollArea>
-          )}
-        </div>
-      </CardContent>
-
-      {/* Generate Dialog */}
-      <Dialog open={showGenerateDialog} onOpenChange={setShowGenerateDialog}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Generate Activation Codes</DialogTitle>
-            <DialogDescription>
-              Create new single-use activation codes for installations
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-4 py-4">
-            <div className="space-y-2">
-              <Label htmlFor="code-count">Number of Codes</Label>
-              <Input
-                id="code-count"
-                type="number"
-                min={1}
-                max={100}
-                value={generateCount}
-                onChange={(e) => setGenerateCount(parseInt(e.target.value) || 1)}
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="code-notes">Notes (optional)</Label>
-              <Textarea
-                id="code-notes"
-                placeholder="e.g., Client name, purpose, etc."
-                value={notes}
-                onChange={(e) => setNotes(e.target.value)}
-              />
-            </div>
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setShowGenerateDialog(false)}>
-              Cancel
-            </Button>
-            <Button onClick={handleGenerate} disabled={generating}>
-              {generating ? (
-                <><Loader2 className="h-4 w-4 animate-spin mr-2" />Generating...</>
+        ) : (
+          <>
+            {/* Current License Status */}
+            <div className="border rounded-lg p-4 bg-slate-50">
+              <h3 className="font-semibold mb-3 flex items-center gap-2">
+                <CheckCircle2 className="h-5 w-5 text-green-600" />
+                Application License Status
+              </h3>
+              {licenseInfo?.is_activated ? (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <span className="text-sm text-muted-foreground">Status</span>
+                    <div className="flex items-center gap-2 mt-1">
+                      <Badge className="bg-green-100 text-green-700 border-green-300">Activated</Badge>
+                    </div>
+                  </div>
+                  <div>
+                    <span className="text-sm text-muted-foreground">Activation Code</span>
+                    <div className="mt-1">
+                      <code className="bg-white px-2 py-1 rounded text-sm font-mono border">
+                        {licenseInfo.activation_code}
+                      </code>
+                    </div>
+                  </div>
+                  <div>
+                    <span className="text-sm text-muted-foreground">Activated On</span>
+                    <div className="mt-1 text-sm">
+                      {licenseInfo.activated_at ? new Date(licenseInfo.activated_at).toLocaleString() : 'N/A'}
+                    </div>
+                  </div>
+                  <div>
+                    <span className="text-sm text-muted-foreground">Instance ID</span>
+                    <div className="mt-1">
+                      <code className="bg-white px-2 py-1 rounded text-xs font-mono border">
+                        {licenseInfo.instance_id || 'N/A'}
+                      </code>
+                    </div>
+                  </div>
+                </div>
               ) : (
-                <><Plus className="h-4 w-4 mr-2" />Generate {generateCount} Code(s)</>
+                <div className="text-center py-4">
+                  <Badge className="bg-amber-100 text-amber-700 border-amber-300">Not Activated</Badge>
+                  <p className="text-sm text-muted-foreground mt-2">This application has not been activated yet.</p>
+                </div>
               )}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+            </div>
+
+            {/* Used Activation Codes Table */}
+            <div className="border rounded-lg overflow-hidden">
+              <div className="bg-slate-50 px-4 py-3 border-b">
+                <span className="font-medium">Activated Licenses ({usedCodes.length})</span>
+              </div>
+              
+              {usedCodes.length === 0 ? (
+                <div className="p-8 text-center text-muted-foreground">
+                  No activated licenses found
+                </div>
+              ) : (
+                <ScrollArea className="h-[300px]">
+                  <table className="w-full">
+                    <thead className="bg-slate-50 sticky top-0">
+                      <tr>
+                        <th className="text-left px-4 py-2 text-sm font-medium">Activation Code</th>
+                        <th className="text-left px-4 py-2 text-sm font-medium">Status</th>
+                        <th className="text-left px-4 py-2 text-sm font-medium">Used On</th>
+                        <th className="text-left px-4 py-2 text-sm font-medium">Notes</th>
+                        <th className="text-right px-4 py-2 text-sm font-medium">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y">
+                      {usedCodes.map((code) => (
+                        <tr key={code.id} className="hover:bg-slate-50/50">
+                          <td className="px-4 py-3">
+                            <code className="bg-slate-100 px-2 py-1 rounded text-sm font-mono">
+                              {code.code}
+                            </code>
+                          </td>
+                          <td className="px-4 py-3">
+                            <Badge className="bg-blue-100 text-blue-700 border-blue-300">Active</Badge>
+                          </td>
+                          <td className="px-4 py-3 text-sm text-muted-foreground">
+                            {code.used_at ? new Date(code.used_at).toLocaleString() : new Date(code.created_at).toLocaleDateString()}
+                          </td>
+                          <td className="px-4 py-3 text-sm text-muted-foreground">
+                            {code.notes || '-'}
+                          </td>
+                          <td className="px-4 py-3">
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => handleCopy(code.code)}
+                              title="Copy code"
+                            >
+                              <Copy className="h-4 w-4" />
+                            </Button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </ScrollArea>
+              )}
+            </div>
+          </>
+        )}
+      </CardContent>
     </Card>
   );
 }
