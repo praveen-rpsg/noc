@@ -642,7 +642,7 @@ export default function ReportsPage() {
                 <span>Period: {previewReport.period_start} - {previewReport.period_end}</span>
               </div>
               <div className="border rounded-lg p-4 bg-muted/30">
-                {renderReportContent(previewReport.content)}
+                {renderReportContent(previewReport.content, previewReport.type)}
               </div>
             </div>
           )}
