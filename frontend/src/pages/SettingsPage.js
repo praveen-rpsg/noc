@@ -42,9 +42,7 @@ import {
   Link,
   Wifi,
   WifiOff,
-  Copy,
-  RefreshCw,
-  Ban
+  RefreshCw
 } from 'lucide-react';
 
 // Generic CRUD Hook
@@ -225,190 +223,6 @@ function ConnectionSettings() {
             )}
           </Button>
         </div>
-      </CardContent>
-    </Card>
-  );
-}
-
-// License Settings Component (Admin Only) - Shows only activated licenses
-function LicenseSettings() {
-  const { user } = useAuth();
-  const [licenseInfo, setLicenseInfo] = useState(null);
-  const [usedCodes, setUsedCodes] = useState([]);
-  const [loading, setLoading] = useState(true);
-
-  const isAdmin = user?.role === 'admin';
-
-  const fetchLicenseInfo = useCallback(async () => {
-    if (!isAdmin) return;
-    try {
-      const API = getApiUrl();
-      // Fetch current app license status
-      const licenseRes = await axios.get(`${API}/license/status`);
-      setLicenseInfo(licenseRes.data);
-      
-      // Fetch only used activation codes
-      const codesRes = await axios.get(`${API}/settings/activation-codes`, { headers: getAuthHeader() });
-      const usedOnly = codesRes.data.filter(code => code.status === 'used');
-      setUsedCodes(usedOnly);
-    } catch (error) {
-      console.error('Failed to fetch license info:', error);
-    } finally {
-      setLoading(false);
-    }
-  }, [isAdmin]);
-
-  useEffect(() => {
-    fetchLicenseInfo();
-  }, [fetchLicenseInfo]);
-
-  const handleCopy = (code) => {
-    navigator.clipboard.writeText(code);
-    toast.success('Code copied to clipboard');
-  };
-
-  if (!isAdmin) {
-    return (
-      <Card className="bg-white border-border/50">
-        <CardContent className="pt-6">
-          <div className="flex items-center justify-center gap-2 text-muted-foreground">
-            <Shield className="h-5 w-5" />
-            <span>Admin access required to view license information</span>
-          </div>
-        </CardContent>
-      </Card>
-    );
-  }
-
-  return (
-    <Card className="bg-white border-border/50">
-      <CardHeader>
-        <div className="flex items-center justify-between">
-          <div>
-            <CardTitle className="flex items-center gap-2">
-              <Key className="h-5 w-5 text-blue-600" />
-              License Information
-            </CardTitle>
-            <CardDescription>
-              View activated licenses for this application
-            </CardDescription>
-          </div>
-          <Button variant="outline" onClick={fetchLicenseInfo}>
-            <RefreshCw className="h-4 w-4 mr-2" />
-            Refresh
-          </Button>
-        </div>
-      </CardHeader>
-      <CardContent className="space-y-6">
-        {loading ? (
-          <div className="p-8 text-center">
-            <Loader2 className="h-6 w-6 animate-spin mx-auto text-muted-foreground" />
-          </div>
-        ) : (
-          <>
-            {/* Current License Status */}
-            <div className="border rounded-lg p-4 bg-slate-50">
-              <h3 className="font-semibold mb-3 flex items-center gap-2">
-                <CheckCircle2 className="h-5 w-5 text-green-600" />
-                Application License Status
-              </h3>
-              {licenseInfo?.is_activated ? (
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div>
-                    <span className="text-sm text-muted-foreground">Status</span>
-                    <div className="flex items-center gap-2 mt-1">
-                      <Badge className="bg-green-100 text-green-700 border-green-300">Activated</Badge>
-                    </div>
-                  </div>
-                  <div>
-                    <span className="text-sm text-muted-foreground">Activation Code</span>
-                    <div className="mt-1">
-                      <code className="bg-white px-2 py-1 rounded text-sm font-mono border">
-                        {licenseInfo.activation_code}
-                      </code>
-                    </div>
-                  </div>
-                  <div>
-                    <span className="text-sm text-muted-foreground">Activated On</span>
-                    <div className="mt-1 text-sm">
-                      {licenseInfo.activated_at ? new Date(licenseInfo.activated_at).toLocaleString() : 'N/A'}
-                    </div>
-                  </div>
-                  <div>
-                    <span className="text-sm text-muted-foreground">Instance ID</span>
-                    <div className="mt-1">
-                      <code className="bg-white px-2 py-1 rounded text-xs font-mono border">
-                        {licenseInfo.instance_id || 'N/A'}
-                      </code>
-                    </div>
-                  </div>
-                </div>
-              ) : (
-                <div className="text-center py-4">
-                  <Badge className="bg-amber-100 text-amber-700 border-amber-300">Not Activated</Badge>
-                  <p className="text-sm text-muted-foreground mt-2">This application has not been activated yet.</p>
-                </div>
-              )}
-            </div>
-
-            {/* Used Activation Codes Table */}
-            <div className="border rounded-lg overflow-hidden">
-              <div className="bg-slate-50 px-4 py-3 border-b">
-                <span className="font-medium">Activated Licenses ({usedCodes.length})</span>
-              </div>
-              
-              {usedCodes.length === 0 ? (
-                <div className="p-8 text-center text-muted-foreground">
-                  No activated licenses found
-                </div>
-              ) : (
-                <ScrollArea className="h-[300px]">
-                  <table className="w-full">
-                    <thead className="bg-slate-50 sticky top-0">
-                      <tr>
-                        <th className="text-left px-4 py-2 text-sm font-medium">Activation Code</th>
-                        <th className="text-left px-4 py-2 text-sm font-medium">Status</th>
-                        <th className="text-left px-4 py-2 text-sm font-medium">Used On</th>
-                        <th className="text-left px-4 py-2 text-sm font-medium">Notes</th>
-                        <th className="text-right px-4 py-2 text-sm font-medium">Actions</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y">
-                      {usedCodes.map((code) => (
-                        <tr key={code.id} className="hover:bg-slate-50/50">
-                          <td className="px-4 py-3">
-                            <code className="bg-slate-100 px-2 py-1 rounded text-sm font-mono">
-                              {code.code}
-                            </code>
-                          </td>
-                          <td className="px-4 py-3">
-                            <Badge className="bg-blue-100 text-blue-700 border-blue-300">Active</Badge>
-                          </td>
-                          <td className="px-4 py-3 text-sm text-muted-foreground">
-                            {code.used_at ? new Date(code.used_at).toLocaleString() : new Date(code.created_at).toLocaleDateString()}
-                          </td>
-                          <td className="px-4 py-3 text-sm text-muted-foreground">
-                            {code.notes || '-'}
-                          </td>
-                          <td className="px-4 py-3">
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              onClick={() => handleCopy(code.code)}
-                              title="Copy code"
-                            >
-                              <Copy className="h-4 w-4" />
-                            </Button>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </ScrollArea>
-              )}
-            </div>
-          </>
-        )}
       </CardContent>
     </Card>
   );
@@ -1047,7 +861,6 @@ export default function SettingsPage() {
         <ScrollArea className="w-full">
           <TabsList className="inline-flex h-10 w-full justify-start">
             <TabsTrigger value="connection" className="flex items-center gap-2"><Link className="h-4 w-4" />Connection</TabsTrigger>
-            <TabsTrigger value="license" className="flex items-center gap-2"><Key className="h-4 w-4" />License</TabsTrigger>
             <TabsTrigger value="email" className="flex items-center gap-2"><Mail className="h-4 w-4" />Email</TabsTrigger>
             <TabsTrigger value="snmp" className="flex items-center gap-2"><Network className="h-4 w-4" />SNMP</TabsTrigger>
             <TabsTrigger value="openstack" className="flex items-center gap-2"><Cloud className="h-4 w-4" />OpenStack</TabsTrigger>
@@ -1061,11 +874,6 @@ export default function SettingsPage() {
         {/* Connection Tab */}
         <TabsContent value="connection">
           <ConnectionSettings />
-        </TabsContent>
-
-        {/* License Tab */}
-        <TabsContent value="license">
-          <LicenseSettings />
         </TabsContent>
 
         {/* Email Tab */}
