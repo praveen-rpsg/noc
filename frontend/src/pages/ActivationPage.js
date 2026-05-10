@@ -153,7 +153,7 @@ export default function ActivationPage({ onActivated }) {
                   value={activationCode}
                   onChange={(e) => setActivationCode(formatActivationCode(e.target.value))}
                   className="font-mono text-center tracking-wider"
-                  maxLength={19}
+                  maxLength={20}
                   required
                   data-testid="activation-code-input"
                 />
@@ -165,7 +165,7 @@ export default function ActivationPage({ onActivated }) {
               <Button 
                 type="submit" 
                 className="w-full" 
-                disabled={loading || activationCode.length < 19}
+                disabled={loading || activationCode.length < 20}
                 data-testid="activate-btn"
               >
                 {loading ? (
