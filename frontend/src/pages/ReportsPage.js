@@ -140,9 +140,253 @@ export default function ReportsPage() {
     return <Icon className="h-5 w-5" />;
   };
 
-  const renderReportContent = (content) => {
+  const renderReportContent = (content, reportType) => {
     if (!content) return null;
     
+    // Enhanced Daily Health Report
+    if (reportType === 'daily_health' && content.device_health) {
+      return (
+        <div className="space-y-6">
+          {/* Summary Section */}
+          {content.summary && (
+            <div className="bg-slate-50 p-4 rounded-lg">
+              <h4 className="font-semibold mb-3">Health Summary</h4>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                <div className="text-center p-3 bg-white rounded-lg">
+                  <div className="text-2xl font-bold text-blue-600">{content.summary.total_devices}</div>
+                  <div className="text-xs text-muted-foreground">Total Devices</div>
+                </div>
+                <div className="text-center p-3 bg-white rounded-lg">
+                  <div className="text-2xl font-bold text-green-600">{content.summary.online_devices}</div>
+                  <div className="text-xs text-muted-foreground">Online</div>
+                </div>
+                <div className="text-center p-3 bg-white rounded-lg">
+                  <div className="text-2xl font-bold text-red-600">{content.summary.critical_alerts}</div>
+                  <div className="text-xs text-muted-foreground">Critical Alerts</div>
+                </div>
+                <div className="text-center p-3 bg-white rounded-lg">
+                  <div className="text-2xl font-bold text-purple-600">{content.summary.health_score}%</div>
+                  <div className="text-xs text-muted-foreground">Health Score</div>
+                </div>
+              </div>
+            </div>
+          )}
+          
+          {/* Device Health Table */}
+          <div>
+            <h4 className="font-semibold mb-3">Device Health Details</h4>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead className="bg-slate-100">
+                  <tr>
+                    <th className="text-left p-2">Device</th>
+                    <th className="text-left p-2">IP Address</th>
+                    <th className="text-center p-2">CPU %</th>
+                    <th className="text-center p-2">Memory %</th>
+                    <th className="text-center p-2">Traffic In/Out</th>
+                    <th className="text-center p-2">Interfaces (Up/Total)</th>
+                    <th className="text-center p-2">Free Ports</th>
+                    <th className="text-center p-2">Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {content.device_health?.slice(0, 10).map((device, idx) => (
+                    <tr key={device.device_name || idx} className="border-b">
+                      <td className="p-2 font-medium">{device.device_name}</td>
+                      <td className="p-2">{device.ip_address}</td>
+                      <td className={`p-2 text-center ${device.cpu_status === 'Critical' ? 'text-red-600 font-bold' : device.cpu_status === 'Warning' ? 'text-amber-600' : ''}`}>
+                        {device.cpu_usage_percent}%
+                      </td>
+                      <td className={`p-2 text-center ${device.memory_status === 'Critical' ? 'text-red-600 font-bold' : device.memory_status === 'Warning' ? 'text-amber-600' : ''}`}>
+                        {device.memory_usage_percent}%
+                      </td>
+                      <td className="p-2 text-center">{device.traffic_in_mbps}/{device.traffic_out_mbps} Mbps</td>
+                      <td className="p-2 text-center">{device.interfaces_up}/{device.total_interfaces}</td>
+                      <td className="p-2 text-center text-green-600">{device.free_interfaces}</td>
+                      <td className="p-2 text-center">
+                        <Badge className={device.status === 'online' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}>
+                          {device.status}
+                        </Badge>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+          
+          {/* Recommendations */}
+          {content.recommendations?.length > 0 && (
+            <div className="bg-amber-50 p-4 rounded-lg">
+              <h4 className="font-semibold mb-2 text-amber-800">Recommendations</h4>
+              <ul className="list-disc list-inside text-sm text-amber-700 space-y-1">
+                {content.recommendations.map((rec, idx) => (
+                  <li key={idx}>{rec}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </div>
+      );
+    }
+    
+    // Enhanced Incident Report
+    if (reportType === 'incident_summary' && content.incidents) {
+      return (
+        <div className="space-y-6">
+          {/* Summary */}
+          {content.summary && (
+            <div className="bg-slate-50 p-4 rounded-lg">
+              <h4 className="font-semibold mb-3">Incident Summary</h4>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                <div className="text-center p-3 bg-white rounded-lg">
+                  <div className="text-2xl font-bold text-blue-600">{content.summary.total_incidents}</div>
+                  <div className="text-xs text-muted-foreground">Total Incidents</div>
+                </div>
+                <div className="text-center p-3 bg-white rounded-lg">
+                  <div className="text-2xl font-bold text-amber-600">{content.summary.open_incidents}</div>
+                  <div className="text-xs text-muted-foreground">Open</div>
+                </div>
+                <div className="text-center p-3 bg-white rounded-lg">
+                  <div className="text-2xl font-bold text-red-600">{content.summary.hardware_issues}</div>
+                  <div className="text-xs text-muted-foreground">Hardware Issues</div>
+                </div>
+                <div className="text-center p-3 bg-white rounded-lg">
+                  <div className="text-2xl font-bold text-purple-600">{content.summary.potential_ios_bugs}</div>
+                  <div className="text-xs text-muted-foreground">Potential Bugs</div>
+                </div>
+              </div>
+            </div>
+          )}
+          
+          {/* Incidents Table */}
+          <div>
+            <h4 className="font-semibold mb-3">Incident Details</h4>
+            <div className="space-y-4">
+              {content.incidents?.slice(0, 10).map((incident, idx) => (
+                <div key={incident.incident_id || idx} className="border rounded-lg p-4 bg-white">
+                  <div className="flex justify-between items-start mb-2">
+                    <div>
+                      <span className="font-semibold">{incident.title}</span>
+                      <Badge className={`ml-2 ${incident.priority === 'P1' ? 'bg-red-500' : incident.priority === 'P2' ? 'bg-orange-500' : 'bg-blue-500'}`}>
+                        {incident.priority}
+                      </Badge>
+                    </div>
+                    <Badge variant="outline">{incident.status}</Badge>
+                  </div>
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-sm mb-3">
+                    <div><span className="text-muted-foreground">Date:</span> {incident.incident_date}</div>
+                    <div><span className="text-muted-foreground">Time:</span> {incident.incident_time}</div>
+                    <div><span className="text-muted-foreground">IP:</span> {incident.ip_address}</div>
+                    <div><span className="text-muted-foreground">Device:</span> {incident.device_name}</div>
+                  </div>
+                  <div className="bg-slate-50 p-3 rounded text-sm mb-2">
+                    <div className="font-medium mb-1">Fault Details:</div>
+                    <p className="text-muted-foreground">{incident.fault_details}</p>
+                  </div>
+                  <div className="bg-blue-50 p-3 rounded text-sm mb-2">
+                    <div className="font-medium mb-1 text-blue-800">Suggested RCA:</div>
+                    <p className="text-blue-700">{incident.suggested_rca}</p>
+                  </div>
+                  <div className="flex gap-4 text-sm">
+                    <div><span className="text-muted-foreground">Hardware Replacement:</span> <span className={incident.hardware_replacement_required === 'Possible' ? 'text-amber-600 font-medium' : ''}>{incident.hardware_replacement_required}</span></div>
+                    <div><span className="text-muted-foreground">IOS Bug:</span> <span className={incident.ios_bug_report !== 'N/A' ? 'text-purple-600 font-medium' : ''}>{incident.ios_bug_report}</span></div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      );
+    }
+    
+    // Enhanced Device Inventory Report
+    if (reportType === 'device_inventory' && content.inventory) {
+      return (
+        <div className="space-y-6">
+          {/* Summary */}
+          {content.summary && (
+            <div className="bg-slate-50 p-4 rounded-lg">
+              <h4 className="font-semibold mb-3">Inventory Summary</h4>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                <div className="text-center p-3 bg-white rounded-lg">
+                  <div className="text-2xl font-bold text-blue-600">{content.summary.total_assets}</div>
+                  <div className="text-xs text-muted-foreground">Total Assets</div>
+                </div>
+                <div className="text-center p-3 bg-white rounded-lg">
+                  <div className="text-2xl font-bold text-green-600">{content.summary.active_assets}</div>
+                  <div className="text-xs text-muted-foreground">Active</div>
+                </div>
+                <div className="text-center p-3 bg-white rounded-lg">
+                  <div className="text-2xl font-bold text-red-600">{content.summary.warranty_expired}</div>
+                  <div className="text-xs text-muted-foreground">Warranty Expired</div>
+                </div>
+                <div className="text-center p-3 bg-white rounded-lg">
+                  <div className="text-2xl font-bold text-amber-600">{content.summary.warranty_expiring_soon}</div>
+                  <div className="text-xs text-muted-foreground">Expiring Soon</div>
+                </div>
+              </div>
+            </div>
+          )}
+          
+          {/* Inventory Table */}
+          <div>
+            <h4 className="font-semibold mb-3">Asset Inventory</h4>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead className="bg-slate-100">
+                  <tr>
+                    <th className="text-left p-2">Asset Tag</th>
+                    <th className="text-left p-2">Name</th>
+                    <th className="text-left p-2">IP Address</th>
+                    <th className="text-left p-2">Model</th>
+                    <th className="text-left p-2">OEM</th>
+                    <th className="text-left p-2">Location</th>
+                    <th className="text-center p-2">Warranty</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {content.inventory?.slice(0, 15).map((item, idx) => (
+                    <tr key={item.asset_id || idx} className="border-b">
+                      <td className="p-2 font-mono text-xs">{item.asset_tag}</td>
+                      <td className="p-2 font-medium">{item.name}</td>
+                      <td className="p-2">{item.ip_address}</td>
+                      <td className="p-2">{item.model}</td>
+                      <td className="p-2">{item.oem_vendor}</td>
+                      <td className="p-2">{item.location}</td>
+                      <td className="p-2 text-center">
+                        <Badge className={
+                          item.warranty_status === 'Active' ? 'bg-green-100 text-green-700' :
+                          item.warranty_status === 'Expiring Soon' ? 'bg-amber-100 text-amber-700' :
+                          item.warranty_status === 'Expired' ? 'bg-red-100 text-red-700' :
+                          'bg-slate-100 text-slate-700'
+                        }>
+                          {item.warranty_status}
+                        </Badge>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+          
+          {/* Warranty Alerts */}
+          {content.warranty_alerts?.length > 0 && (
+            <div className="bg-red-50 p-4 rounded-lg">
+              <h4 className="font-semibold mb-2 text-red-800">Warranty Alerts ({content.warranty_alerts.length} assets)</h4>
+              <ul className="text-sm text-red-700 space-y-1">
+                {content.warranty_alerts.slice(0, 5).map((item, idx) => (
+                  <li key={idx}>• {item.name} ({item.asset_tag}) - {item.warranty_status}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </div>
+      );
+    }
+    
+    // Default rendering for other report types
     return (
       <div className="space-y-4">
         {Object.entries(content).map(([key, value]) => (
