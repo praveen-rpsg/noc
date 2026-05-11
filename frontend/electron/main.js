@@ -2,9 +2,11 @@ const { app, BrowserWindow, Menu, shell, ipcMain, dialog } = require('electron')
 const path = require('path');
 const url = require('url');
 const fs = require('fs');
+const { spawn, exec } = require('child_process');
 
 // Keep a global reference of the window object
 let mainWindow;
+let backendProcess = null;
 
 // Check if running in development
 const isDev = process.env.NODE_ENV === 'development' || !app.isPackaged;
@@ -12,9 +14,20 @@ const isDev = process.env.NODE_ENV === 'development' || !app.isPackaged;
 // Configuration file path for storing backend URL
 const configPath = path.join(app.getPath('userData'), 'config.json');
 
+// Get the resources path for bundled backend
+const getResourcesPath = () => {
+  if (app.isPackaged) {
+    return process.resourcesPath;
+  }
+  return path.join(__dirname, '..', '..');
+};
+
 // Default configuration
 const defaultConfig = {
-  backendUrl: 'http://localhost:8001'
+  backendUrl: 'http://localhost:8001',
+  autoStartBackend: true,
+  mongoUrl: 'mongodb://localhost:27017',
+  dbName: 'atech_noc'
 };
 
 // Load or create configuration
@@ -276,9 +289,14 @@ ipcMain.on('show-notification', (event, { title, body }) => {
 });
 
 // This method will be called when Electron has finished initialization
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   // Load configuration before creating window
   appConfig = loadConfig();
+  
+  // Auto-start backend if enabled
+  if (appConfig.autoStartBackend && app.isPackaged) {
+    await startBackendServer();
+  }
   
   createWindow();
 
@@ -290,12 +308,103 @@ app.whenReady().then(() => {
   });
 });
 
+// Start the bundled backend server
+async function startBackendServer() {
+  return new Promise((resolve, reject) => {
+    const resourcesPath = getResourcesPath();
+    const backendPath = path.join(resourcesPath, 'backend');
+    
+    // Check if backend exists
+    if (!fs.existsSync(path.join(backendPath, 'server.py'))) {
+      console.log('Backend not found at:', backendPath);
+      resolve(false);
+      return;
+    }
+    
+    console.log('Starting backend server from:', backendPath);
+    
+    // Determine Python executable
+    let pythonCmd = process.platform === 'win32' ? 'python' : 'python3';
+    
+    // Check for bundled Python in resources
+    const bundledPython = path.join(resourcesPath, 'python', 
+      process.platform === 'win32' ? 'python.exe' : 'bin/python3');
+    
+    if (fs.existsSync(bundledPython)) {
+      pythonCmd = bundledPython;
+    }
+    
+    // Set environment variables
+    const env = {
+      ...process.env,
+      MONGO_URL: appConfig.mongoUrl,
+      DB_NAME: appConfig.dbName,
+      HOST: '0.0.0.0',
+      PORT: '8001'
+    };
+    
+    // Start the backend
+    backendProcess = spawn(pythonCmd, [
+      '-m', 'uvicorn', 'server:app', '--host', '0.0.0.0', '--port', '8001'
+    ], {
+      cwd: backendPath,
+      env: env,
+      stdio: ['ignore', 'pipe', 'pipe']
+    });
+    
+    backendProcess.stdout.on('data', (data) => {
+      console.log(`Backend: ${data}`);
+      if (data.toString().includes('Uvicorn running')) {
+        resolve(true);
+      }
+    });
+    
+    backendProcess.stderr.on('data', (data) => {
+      console.error(`Backend Error: ${data}`);
+    });
+    
+    backendProcess.on('close', (code) => {
+      console.log(`Backend process exited with code ${code}`);
+      backendProcess = null;
+    });
+    
+    backendProcess.on('error', (err) => {
+      console.error('Failed to start backend:', err);
+      resolve(false);
+    });
+    
+    // Timeout after 30 seconds
+    setTimeout(() => resolve(true), 30000);
+  });
+}
+
+// Stop the backend server
+function stopBackendServer() {
+  if (backendProcess) {
+    console.log('Stopping backend server...');
+    if (process.platform === 'win32') {
+      exec(`taskkill /pid ${backendProcess.pid} /T /F`);
+    } else {
+      backendProcess.kill('SIGTERM');
+    }
+    backendProcess = null;
+  }
+}
+
 // Quit when all windows are closed
 app.on('window-all-closed', () => {
+  // Stop backend server
+  stopBackendServer();
+  
   // On macOS, apps stay active until Cmd+Q
   if (process.platform !== 'darwin') {
     app.quit();
   }
+});
+
+// Clean up on quit
+app.on('before-quit', () => {
+  stopBackendServer();
 });
 
 // Handle certificate errors (for development with self-signed certs)

@@ -11,6 +11,21 @@
     "electron/**/*",
     "!electron/assets/*"
   ],
+  "extraResources": [
+    {
+      "from": "../backend",
+      "to": "backend",
+      "filter": [
+        "**/*.py",
+        "requirements.txt",
+        ".env.example",
+        "!**/__pycache__/**",
+        "!**/tests/**",
+        "!**/*.pyc",
+        "!**/venv/**"
+      ]
+    }
+  ],
   "extraMetadata": {
     "main": "electron/main.js"
   },
@@ -36,7 +51,8 @@
     "installerHeaderIcon": "electron/assets/icon.ico",
     "createDesktopShortcut": true,
     "createStartMenuShortcut": true,
-    "shortcutName": "ATECH NOC Commander"
+    "shortcutName": "ATECH NOC Commander",
+    "include": "installer/nsis-hooks.nsh"
   },
   "mac": {
     "target": [
