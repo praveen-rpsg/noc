@@ -21,9 +21,10 @@ import {
   Copy,
   Download
 } from 'lucide-react';
+import { getApiUrl } from '../services/config';
+import { getAuthHeader } from '../services/auth';
 
-const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
-const API = `${BACKEND_URL}/api`;
+const API = getApiUrl();
 
 export default function SSHTerminalPage() {
   const [devices, setDevices] = useState([]);
@@ -73,7 +74,7 @@ export default function SSHTerminalPage() {
         device_id: selectedDevice,
         username,
         password
-      });
+      }, { headers: getAuthHeader() });
       setConnected(true);
       toast.success('SSH connection established');
       addOutput('system', `Connected to ${devices.find(d => d.id === selectedDevice)?.name}`);
@@ -104,7 +105,7 @@ export default function SSHTerminalPage() {
         username,
         password,
         command: currentCommand
-      });
+      }, { headers: getAuthHeader() });
 
       if (response.data.output) {
         addOutput('output', response.data.output);

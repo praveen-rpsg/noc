@@ -22,9 +22,10 @@ import {
   Loader2,
   CheckCircle
 } from 'lucide-react';
+import { getApiUrl } from '../services/config';
+import { getAuthHeader } from '../services/auth';
 
-const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
-const API = `${BACKEND_URL}/api`;
+const API = getApiUrl();
 
 const PriorityBadge = ({ priority }) => {
   const styles = {
@@ -70,9 +71,10 @@ export default function EscalationPage() {
 
   const fetchData = async () => {
     try {
+      const headers = getAuthHeader();
       const [contactsRes, levelsRes] = await Promise.all([
-        axios.get(`${API}/escalation/contacts`),
-        axios.get(`${API}/escalation/levels`)
+        axios.get(`${API}/escalation/contacts`, { headers }),
+        axios.get(`${API}/escalation/levels`, { headers })
       ]);
       setContacts(contactsRes.data);
       setLevels(levelsRes.data);
@@ -90,7 +92,7 @@ export default function EscalationPage() {
   const handleCheckEscalations = async () => {
     setChecking(true);
     try {
-      const response = await axios.post(`${API}/escalation/check`);
+      const response = await axios.post(`${API}/escalation/check`, {}, { headers: getAuthHeader() });
       setEscalationsNeeded(response.data.escalations_needed);
       if (response.data.count === 0) {
         toast.success('No escalations needed at this time');
@@ -106,7 +108,7 @@ export default function EscalationPage() {
 
   const handleAddContact = async () => {
     try {
-      await axios.post(`${API}/escalation/contacts`, formData);
+      await axios.post(`${API}/escalation/contacts`, formData, { headers: getAuthHeader() });
       toast.success('Contact added');
       setIsAddOpen(false);
       setFormData({ name: '', email: '', role: 'team_lead', level: 1 });
@@ -119,7 +121,7 @@ export default function EscalationPage() {
   const handleDeleteContact = async (contactId) => {
     if (!window.confirm('Are you sure you want to delete this contact?')) return;
     try {
-      await axios.delete(`${API}/escalation/contacts/${contactId}`);
+      await axios.delete(`${API}/escalation/contacts/${contactId}`, { headers: getAuthHeader() });
       toast.success('Contact deleted');
       fetchData();
     } catch (error) {
@@ -130,7 +132,7 @@ export default function EscalationPage() {
   const handleSendEscalation = async (incidentId, level) => {
     setSending(prev => ({ ...prev, [`${incidentId}-${level}`]: true }));
     try {
-      const response = await axios.post(`${API}/escalation/send?incident_id=${incidentId}&level=${level}`);
+      const response = await axios.post(`${API}/escalation/send?incident_id=${incidentId}&level=${level}`, {}, { headers: getAuthHeader() });
       toast.success(`Escalation sent to ${response.data.level}`);
       handleCheckEscalations();
     } catch (error) {

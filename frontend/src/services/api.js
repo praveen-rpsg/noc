@@ -1,5 +1,6 @@
 import axios from 'axios';
 import { getApiUrl, getBackendUrlSync, initConfig } from './config';
+import { getAuthHeader } from './auth';
 
 // Initialize API URL - will be updated after config loads
 let API = `${getBackendUrlSync()}/api`;
@@ -14,10 +15,11 @@ export const initializeApi = async () => {
 // Helper to get current API URL
 export const getAPI = () => API;
 
-// Create axios instance that always uses current API URL
+// Create axios instance that always uses current API URL and auth headers
 const apiCall = (method, endpoint, options = {}) => {
   const url = `${API}${endpoint}`;
-  return axios({ method, url, ...options });
+  const headers = { ...getAuthHeader(), ...options.headers };
+  return axios({ method, url, headers, ...options });
 };
 
 // Devices API

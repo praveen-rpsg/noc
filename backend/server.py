@@ -3,6 +3,8 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
+from device_monitor import monitor_devices
+from snmp_receiver import start_snmp_trap_receiver
 import os
 import logging
 from pathlib import Path
@@ -10,23 +12,29 @@ from pydantic import BaseModel, Field, ConfigDict, EmailStr
 from typing import List, Optional, Dict, Any, Set
 import uuid
 from datetime import datetime, timezone, timedelta
+import time
 import jwt
 import bcrypt
 import asyncio
 from enum import Enum
 import json
 import paramiko
+import re
 import io
 import telnetlib3
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
+from agents import (
+     Agent, AgentCreate, AgentUpdate,
+    ActivationCode, EscalationContact, EscalationContactCreate, ESCALATION_LEVELS
+)
 
 from agents import (
     generate_activation_codes, generate_activation_code, Agent, AgentCreate, AgentUpdate,
     ActivationCode, EscalationContact, EscalationContactCreate, ESCALATION_LEVELS
 )
-
+from network_services import get_vendor_profile, VENDOR_PROFILES
 from network_services import (
     SNMPService, NetworkDiscoveryService, SSHService,
     OpenStackConnector, OracleDBConnector, VCenterConnector,
@@ -34,20 +42,21 @@ from network_services import (
 )
 
 ROOT_DIR = Path(__file__).parent
-load_dotenv(ROOT_DIR / '.env')
+load_dotenv(ROOT_DIR / 'dbvar.env')
 
 # MongoDB connection
-mongo_url = os.environ['MONGO_URL']
-client = AsyncIOMotorClient(mongo_url)
-db = client[os.environ['DB_NAME']]
+# mongo_url = os.environ['MONGO_URL']
+# client = AsyncIOMotorClient(mongo_url)
+# db = client[os.environ['DB_NAME']]
+from shared import db
 
 # JWT Config
 JWT_SECRET = os.environ.get('JWT_SECRET', 'noc-commander-secret')
 JWT_ALGORITHM = os.environ.get('JWT_ALGORITHM', 'HS256')
 ACCESS_TOKEN_EXPIRE_MINUTES = int(os.environ.get('ACCESS_TOKEN_EXPIRE_MINUTES', 1440))
 
-# Emergent LLM Key
-EMERGENT_LLM_KEY = os.environ.get('EMERGENT_LLM_KEY', '')
+# # Emergent LLM Key
+# EMERGENT_LLM_KEY = os.environ.get('EMERGENT_LLM_KEY', '')
 
 # Office 365 SMTP Configuration
 SMTP_SERVER = os.environ.get('SMTP_SERVER', 'smtp.office365.com')
@@ -64,6 +73,58 @@ app = FastAPI(title="ATECH NOC Commander API", version="2.0.0")
 async def health_check():
     return {"status": "healthy", "version": "2.0.0", "service": "ATECH NOC Commander"}
 
+@app.on_event("startup")
+async def startup_event():
+
+    # =========================
+    # Default Admin User
+    # =========================
+    existing_admin = await db.users.find_one(
+        {"email": "noc@ameyatechnologies.com"}
+    )
+
+    if not existing_admin:
+        now = datetime.now(timezone.utc)
+
+        await db.users.insert_one({
+            "id": str(uuid.uuid4()),
+            "email": "noc@ameyatechnologies.com",
+            "name": "Admin User",
+            "role": "admin",
+            "password_hash": hash_password("admin123"),
+            "is_active": True,
+            "created_at": now.isoformat(),
+            "updated_at": now.isoformat()
+        })
+
+        print("Default admin created")
+
+    # =========================
+    # Default Activated License
+    # =========================
+    existing_codes = await db.activation_codes.count_documents({})
+ 
+    if existing_codes == 0:
+        codes = generate_activation_codes(1)
+        await db.activation_codes.insert_many(codes)
+    # =========================
+    # Existing Startup Logic
+    # =========================
+    asyncio.create_task(
+        monitor_devices(
+            db,
+            get_device_metrics,
+            decrypt_password,
+            create_offline_incident,
+            resolve_device_incident,
+            save_device_event,
+            ws_manager
+ # Modified on 24-07-26 for calling websocket manager
+        )
+    )
+    asyncio.create_task(start_snmp_trap_receiver())
+    print("Background monitor and SNMP Trap Receiver started.")
+    
 # License activation status check (public endpoint)
 @app.get("/api/license/status")
 async def get_license_status():
@@ -202,7 +263,15 @@ class DeviceType(str, Enum):
     VM = "virtual_machine"
     CLOUD_INSTANCE = "cloud_instance"
     ACCESS_POINT = "access_point"
-
+    STORAGE = "storage"
+    VIRTUALIZATION_HOST = "virtualization_host"
+    NETAPP_STORAGE = "netapp_storage"
+    HITACHI_DEVICE = "hitachi_device"
+    ARISTA_DEVICE = "arista_device"
+    DELL_EMC_STORAGE = "dell_emc_storage"
+    ORACLE_DEVICE = "oracle_device"
+    AZURE_DEVICE = "azure_device"
+    
 class DeviceStatus(str, Enum):
     ONLINE = "online"
     OFFLINE = "offline"
@@ -222,6 +291,7 @@ class AlertStatus(str, Enum):
     ACKNOWLEDGED = "acknowledged"
     RESOLVED = "resolved"
     SUPPRESSED = "suppressed"
+    PENDING_APPROVAL = "pending_approval"
 
 class IncidentPriority(str, Enum):
     P1 = "P1"
@@ -267,6 +337,8 @@ class Device(BaseModel):
     type: DeviceType
     ip_address: str
     location: str
+    username: Optional[str] = None
+    password: Optional[str] = None
     status: DeviceStatus = DeviceStatus.ONLINE
     vendor: Optional[str] = None
     model: Optional[str] = None
@@ -281,6 +353,8 @@ class Device(BaseModel):
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     # Enhanced device details
     mac_address: Optional[str] = None
+    interfaces: List[Dict] = Field(default_factory=list)
+    routing_table: List[Dict] = Field(default_factory=list)
     hostname: Optional[str] = None
     os_version: Optional[str] = None
     os_install_date: Optional[str] = None  # ISO date string
@@ -294,6 +368,8 @@ class DeviceCreate(BaseModel):
     type: DeviceType
     ip_address: str
     location: str
+    username: Optional[str] = None
+    password: Optional[str] = None
     vendor: Optional[str] = None
     model: Optional[str] = None
     serial_number: Optional[str] = None
@@ -395,11 +471,11 @@ class Asset(BaseModel):
     location: str
     owner: str
     status: str = "active"
-    purchase_date: Optional[str] = None
-    warranty_expiry: Optional[str] = None
-    warranty_status: Optional[str] = None  # "active", "expired", "expiring_soon"
-    eol_date: Optional[str] = None
-    contract_details: Optional[str] = None
+    purchase_date:Optional[str] = None #Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    warranty_expiry:Optional[str] = "unknown" #Field(default_factory=lambda: (datetime.now(timezone.utc) + timedelta(days=365)).isoformat())
+    warranty_status:Optional[str] = "unknown" # "active", "expired", "expiring_soon"
+    eol_date:Optional[str] = None # Field(default_factory=lambda: (datetime.now(timezone.utc) + timedelta(days=365*5)).isoformat())
+    contract_details: Optional[str] = None 
     license_info: Optional[str] = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     # Extended fields for inventory reporting
@@ -813,6 +889,7 @@ class ActionType(str, Enum):
     SWITCHING_LOOP_FIX = "switching_loop_fix"
     ROUTING_LOOP_FIX = "routing_loop_fix"
     SERVICE_RESTART = "service_restart"
+    PING_TEST = "ping_test"
     INTERFACE_BOUNCE = "interface_bounce"
     
     # Actions requiring confirmation
@@ -822,10 +899,12 @@ class ActionType(str, Enum):
     FACTORY_RESET = "factory_reset"
     POWER_CYCLE = "power_cycle"
     HARDWARE_REPLACEMENT = "hardware_replacement"
+    STORAGE_RESTART = "storage_restart"
+    DATABASE_RESTART = "database_restart"
+    VM_RESTART = "vm_restart"
 
 # Actions that can be auto-executed without confirmation
 AUTO_RESOLVE_ACTIONS = [
-    ActionType.CONFIG_CORRECTION,
     ActionType.CLEAR_LOGS,
     ActionType.ROUTE_TABLE_FIX,
     ActionType.TRACEROUTE_ANALYSIS,
@@ -835,7 +914,9 @@ AUTO_RESOLVE_ACTIONS = [
     ActionType.SWITCHING_LOOP_FIX,
     ActionType.ROUTING_LOOP_FIX,
     ActionType.SERVICE_RESTART,
-    ActionType.INTERFACE_BOUNCE,
+    ActionType.PING_TEST,
+    
+    
 ]
 
 # Actions requiring user confirmation
@@ -846,6 +927,13 @@ CONFIRMATION_REQUIRED_ACTIONS = [
     ActionType.FACTORY_RESET,
     ActionType.POWER_CYCLE,
     ActionType.HARDWARE_REPLACEMENT,
+    ActionType.STORAGE_RESTART,
+    ActionType.DATABASE_RESTART,
+    ActionType.VM_RESTART,
+    ActionType.CONFIG_CORRECTION,
+    ActionType.INTERFACE_BOUNCE,
+    ActionType.SERVICE_RESTART,
+    ActionType.ROUTE_TABLE_FIX,
 ]
 
 class AgentExecutionStatus(str, Enum):
@@ -961,30 +1049,75 @@ def serialize_doc(doc: dict) -> dict:
 # ===================== AI SERVICE =====================
 async def get_ai_analysis(context: str, query: str) -> str:
     """Get AI analysis using Emergent LLM"""
-    try:
-        from emergentintegrations.llm.chat import LlmChat, UserMessage
-        
-        chat = LlmChat(
-            api_key=EMERGENT_LLM_KEY,
-            session_id=f"noc-{str(uuid.uuid4())[:8]}",
-            system_message="""You are an expert Network Operation Center (NOC) AI assistant. 
-You help NOC engineers with:
-- Troubleshooting network and infrastructure issues
-- Root Cause Analysis (RCA)
-- Providing step-by-step resolution suggestions
-- Analyzing performance metrics and logs
-- Identifying patterns and anomalies
-- Recommending preventive measures
 
-Be concise, technical, and actionable in your responses."""
-        ).with_model("openai", "gpt-5.2")
-        
-        user_message = UserMessage(text=f"Context: {context}\n\nQuery: {query}")
+    try:
+        ROOT_DIR = Path(__file__).parent
+        load_dotenv(ROOT_DIR / "dbvar.env", override=True)
+
+        emergent_llm_key = os.getenv("EMERGENT_LLM_KEY")
+
+        if not emergent_llm_key:
+            logger.warning("LLM_KEY not set - AI analysis disabled")
+            return "AI analysis is not configured. Please set LLM_KEY environment variable."
+
+        from emergentintegrations.llm.chat import LlmChat, UserMessage
+
+        chat = LlmChat(
+            api_key=emergent_llm_key,
+            session_id=f"noc-{str(uuid.uuid4())[:8]}",
+            system_message="""
+You are an expert Autonomous NOC AI for enterprise networks and data centers. 
+CRITICAL RULE: You must NEVER output conversational markdown, bullet points, or explanatory essays outside of your data structure. 
+You MUST return your response as a VALID, RAW JSON object ONLY. 
+Do not wrap your entire response in friendly text greetings. Your output must strictly match this exact JSON structure:
+{
+  "classification": "alert",
+  "analysis": "Concise root-cause analysis summary here...",
+  "proposed_commands": ["command 1", "command 2"]
+}
+"""
+        ).with_model(provider="gemini", model="gemini-2.5-pro")
+
+        user_message = UserMessage(
+            text=f"Context: {context}\n\nQuery: {query}"
+        )
+
         response = await chat.send_message(user_message)
-        return response
+
+        content = response.strip() #added/modified 2/08/2026
+        if content.startswith("```json"):
+            content = content[7:-3].strip()
+        elif content.startswith("```"):
+            content = content[3:-3].strip()
+            
+        try:
+            parsed_result = json.loads(content)
+        except json.JSONDecodeError:
+            # Fallback: if the LLM still output conversational text, wrap it 
+            # cleanly into the analysis field instead of crashing the UI
+            json_match = re.search(r'\{.*\}', response, re.DOTALL)
+            if json_match:
+                parsed_result = json.loads(json_match.group(0))
+            else:
+                parsed_result = {
+                    "classification": "alert",
+                    "analysis": response, # Safely passes the narrative text into the analysis box
+                    "proposed_commands": []
+                }
+        
+        return parsed_result
+
+    except ImportError as e:
+        logger.error(f"emergentintegrations not installed: {e}")
+        return (
+            "AI module not installed. Please run: "
+            "pip install emergentintegrations "
+            "--extra-index-url https://d33sy5i8bnduwe.cloudfront.net/simple/"
+        )
+
     except Exception as e:
         logger.error(f"AI analysis error: {e}")
-        return f"AI analysis temporarily unavailable. Error: {str(e)}"
+        return f"AI analysis error: {str(e)}"
 
 # ===================== AUTONOMOUS AGENT SERVICE =====================
 
@@ -1007,86 +1140,61 @@ class AutonomousAgentService:
         return settings
     
     async def analyze_incident_for_actions(self, incident: dict, device: dict = None) -> dict:
-        """Use AI to analyze incident and determine required actions"""
-        device_info = ""
-        if device:
-            device_info = f"""
-Device Information:
-- Name: {device.get('name', 'N/A')}
-- Type: {device.get('type', 'N/A')}
-- IP: {device.get('ip_address', 'N/A')}
-- Vendor: {device.get('vendor', 'N/A')}
-- Model: {device.get('model', 'N/A')}
-- Status: {device.get('status', 'N/A')}
-- OS Version: {device.get('os_version', 'N/A')}
-"""
-        
+        """Phase 1: Initial investigation with full topology"""
+        all_devices = await db.devices.find({}, {"_id": 0}).to_list(100)
+        devices_list_str = "\n".join([
+            f"- {d.get('name')} ({d.get('ip_address')}) - {d.get('vendor','Unknown')}" 
+            for d in all_devices
+        ])
+
+        target_ip = device.get('ip_address', 'N/A') if device else 'N/A'
+
         context = f"""
-INCIDENT DETAILS:
-- Ticket: {incident.get('ticket_number', 'N/A')}
-- Title: {incident.get('title', 'N/A')}
-- Description: {incident.get('description', 'N/A')}
-- Priority: {incident.get('priority', 'N/A')}
-- Category: {incident.get('category', 'N/A')}
-- Status: {incident.get('status', 'N/A')}
-{device_info}
+=== FULL NETWORK TOPOLOGY ===
+{devices_list_str}
 
-AVAILABLE AUTO-RESOLVE ACTIONS (no confirmation needed):
-1. config_correction - Fix configuration errors
-2. clear_logs - Clear system/application logs
-3. route_table_fix - Fix routing table issues
-4. traceroute_analysis - Run traceroute to detect packet drops
-5. stp_loop_detection - Detect and fix STP loops
-6. asymmetric_routing_fix - Fix asymmetric routing issues
-7. memory_cleanup - Clean up dead memory/processes
-8. switching_loop_fix - Detect and fix switching loops
-9. routing_loop_fix - Detect and fix routing loops
-10. service_restart - Restart affected services
-11. interface_bounce - Bounce network interfaces
-
-ACTIONS REQUIRING USER CONFIRMATION:
-1. device_reboot - Full device reboot
-2. link_reset - Reset network links
-3. firmware_update - Update device firmware
-4. factory_reset - Factory reset device
-5. power_cycle - Power cycle device
-6. hardware_replacement - Flag for hardware replacement
+=== INCIDENT ===
+Offline Device: {device.get('name', 'N/A')} ({target_ip})
 """
-        
-        query = """Analyze this incident and provide a JSON response with:
-1. root_cause: Brief root cause analysis
-2. actions: Array of actions to take, each with:
-   - action_type: One of the action types listed above
-   - description: What this action will do
-   - command: The CLI command to execute (if applicable)
-   - risk_level: "low", "medium", "high", or "critical"
-   - estimated_downtime: Expected downtime (e.g., "0 minutes", "5 minutes")
-   - order: Execution order (1, 2, 3...)
-3. resolution_confidence: Percentage (0-100) confidence this will resolve the issue
 
-IMPORTANT: Return ONLY valid JSON, no markdown or explanations. Example:
+        query = """**RETURN ONLY VALID JSON. NO OTHER TEXT, NO MARKDOWN, NO EXPLANATIONS.**
+
 {
-  "root_cause": "Memory leak causing high CPU",
+  "root_cause": "Initial reachability analysis for target IP",
   "actions": [
-    {"action_type": "memory_cleanup", "description": "Clear dead processes", "command": "pkill -9 zombie_proc", "risk_level": "low", "estimated_downtime": "0 minutes", "order": 1}
+    {
+      "action_type": "investigate_network",
+      "target_device_name": "EXACT_UPSTREAM_DEVICE_NAME_HERE",
+      "description": "Query routing table and interface status toward the offline target",
+      "command": "show ip route TARGET_IP_HERE\\nshow ip interface brief",
+      "risk_level": "low",
+      "estimated_downtime": "0 minutes",
+      "order": 1
+    }
   ],
-  "resolution_confidence": 85
-}"""
-        
+  "resolution_confidence": 75
+}
+"""
+
         try:
             response = await get_ai_analysis(context, query)
-            # Try to parse JSON from response
+            
+            # More robust JSON extraction
             import re
-            json_match = re.search(r'\{[\s\S]*\}', response)
+            json_match = re.search(r'(\{[\s\S]*\})', response.strip())
             if json_match:
-                return json.loads(json_match.group())
-            return {"root_cause": "Unable to determine", "actions": [], "resolution_confidence": 0}
+                json_str = json_match.group(1)
+                # Clean common LLM artifacts
+                json_str = re.sub(r'^.*?\{', '{', json_str, flags=re.DOTALL)
+                return json.loads(json_str)
+            
+            return {"root_cause": "Parse failed - invalid AI response", "actions": []}
         except Exception as e:
-            logger.error(f"Error analyzing incident: {e}")
-            return {"root_cause": str(e), "actions": [], "resolution_confidence": 0}
+            logger.error(f"Phase 1 JSON parse error: {e}")
+            return {"root_cause": str(e), "actions": []}
     
     async def connect_ssh(self, device: dict) -> tuple:
-        """Connect to device via SSH"""
+        """Connect to device via SSH using decrypted credentials"""
         settings = await self.get_agent_settings()
         
         if not settings.get('enable_real_ssh', True):
@@ -1096,112 +1204,158 @@ IMPORTANT: Return ONLY valid JSON, no markdown or explanations. Example:
         if not ip:
             return None, "No IP address configured"
         
-        # Try to get SSH credentials from settings
-        ssh_creds = await db.settings_ssh.find_one({"device_id": device.get('id')}, {"_id": 0})
-        if not ssh_creds:
-            # Try device-type based credentials
-            ssh_creds = await db.settings_ssh.find_one({"device_type": device.get('type')}, {"_id": 0})
+        # Fetch exact credentials from the device document
+        username = device.get('username') 
+        encrypted_password = device.get('password', '')
+
+        if not username:
+            return None, "SSH connection failed: No username configured for this device in the database."
         
-        username = ssh_creds.get('username', 'admin') if ssh_creds else 'admin'
-        password = ssh_creds.get('password', '') if ssh_creds else ''
-        port = ssh_creds.get('port', 22) if ssh_creds else 22
+        # 2. CRITICAL FIX: Decrypt the password using your Fernet cipher
+        password = ""
+        if encrypted_password:
+            try:
+                password = decrypt_password(encrypted_password)
+            except Exception as e:
+                logger.error(f"Decryption failed for {ip}: {e}")
+                return None, "SSH connection failed: Could not decrypt device password."
+        else:
+            return None, "SSH connection failed: No password stored for this device."
         
         try:
             client = paramiko.SSHClient()
             client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+            
+            # 3. Pass the cleartext decrypted password to the router
             client.connect(
                 ip,
-                port=port,
+                port=22,
                 username=username,
                 password=password,
                 timeout=settings.get('ssh_timeout', 30),
                 allow_agent=False,
                 look_for_keys=False
             )
+            
+            # MAGIC FIX: Attach password silently to the client object
+            client.vendor = device.get("vendor", "")
+            client.device_password = password
+            
             return client, "Connected successfully"
         except Exception as e:
             logger.warning(f"SSH connection failed to {ip}: {e}")
             return None, f"SSH connection failed: {str(e)}"
     
     async def execute_command(self, ssh_client, command: str, timeout: int = 60) -> dict:
-        """Execute a command via SSH"""
+        """Execute a command via SSH or locally if no SSH client is provided (Production Mode)"""
         if ssh_client is None:
-            # Simulation mode
-            return {
-                "success": True,
-                "output": f"[SIMULATED] Command executed: {command}",
-                "simulated": True
-            }
-        
+            # Production Local Execution
+            try:
+                process = await asyncio.create_subprocess_shell(
+                    command,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE
+                )
+                try:
+                    stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=timeout)
+                except asyncio.TimeoutError:
+                    process.kill()
+                    stdout, stderr = await process.communicate()
+                    return {"success": False, "output": stdout.decode('utf-8', errors='ignore'), "error": "Timeout", "status_code": -1, "simulated": False}
+                
+                return {
+                    "success": process.returncode == 0,
+                    "output": stdout.decode('utf-8', errors='ignore'),
+                    "error": stderr.decode('utf-8', errors='ignore'),
+                    "status_code": process.returncode, "simulated": False
+                }
+            except Exception as e:
+                return {"success": False, "output": "", "error": str(e), "status_code": -1, "simulated": False}
+
+       
         try:
-            stdin, stdout, stderr = ssh_client.exec_command(command, timeout=timeout)
-            output = stdout.read().decode('utf-8')
-            error = stderr.read().decode('utf-8')
+            shell = ssh_client.invoke_shell()
+            await asyncio.sleep(1) # Wait for initial prompt banner
             
+            initial_output = ""
+            if shell.recv_ready():
+                initial_output = shell.recv(65535).decode('utf-8', errors='ignore')
+                
+            #device_vendor = getattr(ssh_client, 'vendor', '').lower()
+
+            device_vendor = getattr(ssh_client, 'vendor', '').lower()
+            profile = get_vendor_profile(device_vendor)
+            
+            escalate_prompt = profile.cli_patterns.get("escalation_trigger_prompt")
+            escalate_cmd = profile.commands.get("privilege_escalation_command")
+
+            # --- PRIVILEGE ESCALATION DRIVEN BY DATA PROFILES ---
+            if escalate_cmd and escalate_prompt and initial_output.strip().endswith(escalate_prompt):
+                shell.send(f"{escalate_cmd}\n")
+                await asyncio.sleep(1)
+                enable_output = shell.recv(65535).decode('utf-8', errors='ignore') if shell.recv_ready() else ""
+                if "password" in enable_output.lower():
+                    password = getattr(ssh_client, 'device_password', "")
+                    shell.send(password + "\n")
+                    await asyncio.sleep(1)
+
+            # --- SEND COMMAND SEQUENCE ---
+            for line in command.split('\n'):
+                if line.strip():
+                    shell.send(line.strip() + "\n")
+                    await asyncio.sleep(0.5)
+            
+            await asyncio.sleep(2) # Allow target vendor operating system to finalize output buffers
+            
+            output = ""
+            while shell.recv_ready():
+                output += shell.recv(65535).decode('utf-8', errors='ignore')
+                await asyncio.sleep(0.1)
+                
+            # --- SYNTAX ERROR CHECKING MATRICES ---
+            is_success = True
+            error_msg = ""
+            vendor_syntax_errors = [
+                "Invalid input detected", "unknown command", "syntax error", 
+                "Command rejected", "unrecognized command", "ambiguous command"
+            ]
+            if any(err in output for err in vendor_syntax_errors):
+                is_success = False
+                error_msg = f"Vendor Operating System syntax constraint violation intercepted."
+                
             return {
-                "success": True if not error else False,
-                "output": output,
-                "error": error,
+                "success": is_success,
+                "output": output.strip(),
+                "error": error_msg,
+                "status_code": 0 if is_success else 1,
                 "simulated": False
             }
         except Exception as e:
-            return {
-                "success": False,
-                "output": "",
-                "error": str(e),
-                "simulated": False
-            }
-    
+            return {"success": False, "output": "", "error": str(e), "status_code": -1, "simulated": False}
+        
     async def execute_auto_action(self, action: dict, ssh_client, device: dict) -> dict:
-        """Execute an auto-resolve action"""
+        """Execute an auto-resolve action dynamically without hardcoded vendor commands."""
         action_type = action.get('action_type')
         command = action.get('command')
         
-        # Generate appropriate command based on action type if not provided
         if not command:
-            device_type = device.get('type', 'server')
-            vendor = device.get('vendor', '').lower()
+            vendor = device.get('vendor', 'generic')
+            # Fetch the profile mapping configuration directly
+            profile = get_vendor_profile(vendor)
             
-            command_templates = {
-                'config_correction': {
-                    'cisco': 'show running-config | include error',
-                    'default': 'cat /etc/network/interfaces'
-                },
-                'clear_logs': {
-                    'cisco': 'clear logging',
-                    'default': 'truncate -s 0 /var/log/syslog'
-                },
-                'route_table_fix': {
-                    'cisco': 'show ip route',
-                    'default': 'ip route show'
-                },
-                'traceroute_analysis': {
-                    'cisco': 'traceroute 8.8.8.8',
-                    'default': 'traceroute -n 8.8.8.8'
-                },
-                'stp_loop_detection': {
-                    'cisco': 'show spanning-tree summary',
-                    'default': 'brctl showstp br0'
-                },
-                'memory_cleanup': {
-                    'cisco': 'clear memory',
-                    'default': 'sync; echo 3 > /proc/sys/vm/drop_caches'
-                },
-                'service_restart': {
-                    'default': 'systemctl restart networking'
-                },
-                'interface_bounce': {
-                    'cisco': 'interface shutdown; no shutdown',
-                    'default': 'ifdown eth0 && ifup eth0'
-                }
-            }
-            
-            if action_type in command_templates:
-                cmd_dict = command_templates[action_type]
-                command = cmd_dict.get(vendor, cmd_dict.get('default', 'echo "No command available"'))
-        
+            # Check if the profile dictionary natively contains the troubleshooting command macro
+            if action_type in profile.commands:
+                command = profile.commands[action_type]
+            else:
+                # Fall back to a global config mapping stored inside your MongoDB collection 
+                global_cmd_doc = await db.vendor_commands.find_one({"vendor": profile.name, "action_type": action_type})
+                if global_cmd_doc:
+                    command = global_cmd_doc.get("command")
+                else:
+                    # Universal standard fallback execution command
+                    command = "echo 'Command template unconfigured for vendor'"
+
         result = await self.execute_command(ssh_client, command)
-        
         return {
             "action_type": action_type,
             "command": command,
@@ -1210,221 +1364,223 @@ IMPORTANT: Return ONLY valid JSON, no markdown or explanations. Example:
             "success": result.get('success', False)
         }
     
-    async def run_autonomous_troubleshooting(self, incident_id: str, triggered_by: str, trigger_type: str = "manual") -> dict:
-        """Main function to run autonomous troubleshooting"""
-        
-        # Get incident
+    async def _get_topology_summary(self) -> str:
+        devices = await db.devices.find({}, {"_id": 0, "name":1, "ip_address":1, "vendor":1}).to_list(50)
+        return "\n".join([f"- {d['name']} ({d['ip_address']}) {d.get('vendor','')}" for d in devices])
+
+    # New Method of Troubleshooting 
+    async def analyze_investigation_results(
+            self,
+            incident: dict,
+            offline_device: dict,
+            upstream_device_name: str,
+            cli_outputs: str,
+            topology_context: dict = None
+        ) -> dict:
+
+            candidate_interfaces = []
+
+            if topology_context:
+
+                for upstream in topology_context.get(
+                    "upstream_devices",
+                    []
+                ):
+
+                    if upstream["hostname"] != upstream_device_name:
+                        continue
+
+                    for intf in upstream.get(
+                        "interfaces",
+                        []
+                    ):
+
+                        name = intf.get(
+                            "interface",
+                            ""
+                        ).lower()
+
+                        if name.startswith(
+                            (
+                                "loopback",
+                                "vlan",
+                                "null",
+                                "tunnel"
+                            )
+                        ):
+                            continue
+
+                        if (
+                            intf.get("protocol")
+                            == "down"
+                        ):
+                            candidate_interfaces.append(
+                                intf
+                            )
+
+            context = f"""
+        OFFLINE DEVICE:
+        {json.dumps(offline_device, indent=2)}
+
+        UPSTREAM DEVICE:
+        {upstream_device_name}
+
+        DOWN INTERFACES:
+        {json.dumps(candidate_interfaces, indent=2)}
+
+        CLI OUTPUT:
+        {cli_outputs}
+        """
+
+            query = """
+        RETURN ONLY JSON
+
+        {
+        "root_cause":"",
+        "identified_interface":"",
+        "recommended_command":"",
+        "resolution_confidence":0
+        }
+        """
+
+            try:
+
+                response = await get_ai_analysis(
+                    context,
+                    query
+                )
+
+                match = re.search(
+                    r'(\{[\s\S]*\})',
+                    response
+                )
+
+                if not match:
+                    raise Exception(
+                        "Invalid JSON response"
+                    )
+
+                analysis = json.loads(
+                    match.group(1)
+                )
+
+                identified = analysis.get(
+                    "identified_interface"
+                )
+
+                if identified:
+
+                    analysis["auto_fix"] = (
+                        f"configure terminal\n"
+                        f"interface {identified}\n"
+                        f"no shutdown\n"
+                        f"end\n"
+                        f"write memory"
+                    )
+
+                return analysis
+
+            except Exception as e:
+
+                logger.error(
+                    f"Investigation analysis failed: {e}"
+                )
+
+                return {
+                    "root_cause": str(e),
+                    "identified_interface": None,
+                    "recommended_command": None,
+                    "resolution_confidence": 0
+                }
+            
+    # Modified the fuction block 21/07/2026
+    async def run_autonomous_troubleshooting(
+        self,
+        incident_id: str,
+        triggered_by: str,
+        trigger_type: str = "manual"
+    ):
+        """
+        Main entry point for Autonomous Troubleshooting Engine.
+        Refactored to use inline LLM analysis directly, bypassing legacy playbooks.
+        """
         incident = await db.incidents.find_one({"id": incident_id}, {"_id": 0})
         if not incident:
-            raise HTTPException(status_code=404, detail="Incident not found")
-        
-        # Create execution record
-        execution = AgentExecution(
-            incident_id=incident_id,
-            triggered_by=triggered_by,
-            trigger_type=trigger_type,
-            status=AgentExecutionStatus.ANALYZING
-        )
-        
-        execution_dict = execution.model_dump()
-        execution_dict["created_at"] = execution_dict["created_at"].isoformat()
-        execution_dict["updated_at"] = execution_dict["updated_at"].isoformat()
-        
-        # Add initial log entry
-        execution_dict["execution_log"].append({
+            raise Exception("Incident not found")
+
+        device = await db.devices.find_one({"id": incident["device_id"]}, {"_id": 0})
+        if not device:
+            raise Exception("Device not found")
+
+        initial_log = [{
             "timestamp": datetime.now(timezone.utc).isoformat(),
-            "message": f"Agent started - triggered by {triggered_by} ({trigger_type})",
+            "message": f"Starting unified AI diagnostics for {device.get('name', 'Target Device')}...",
             "type": "info"
-        })
-        
-        # Get affected device
-        device = None
-        if incident.get('affected_devices'):
-            device_id = incident['affected_devices'][0]
-            device = await db.devices.find_one({"id": device_id}, {"_id": 0})
-            if device:
-                execution_dict["device_id"] = device.get('id')
-                execution_dict["device_ip"] = device.get('ip_address')
-                execution_dict["execution_log"].append({
-                    "timestamp": datetime.now(timezone.utc).isoformat(),
-                    "message": f"Target device: {device.get('name')} ({device.get('ip_address')})",
-                    "type": "info"
-                })
-        
-        # Store a copy for insertion to avoid _id being added to our response dict
-        insert_dict = execution_dict.copy()
-        await db.agent_executions.insert_one(insert_dict)
-        
+        }]
+
+        execution = {
+            "id": str(uuid.uuid4()),
+            "incident_id": incident_id,
+            "status": "running",
+            "triggered_by": triggered_by,
+            "trigger_type": trigger_type,
+            "execution_log": initial_log,
+            "created_at": datetime.now(timezone.utc).isoformat()
+        }
+
+        await db.agent_executions.insert_one(execution)
+
         try:
-            # Analyze incident and determine actions
-            analysis = await self.analyze_incident_for_actions(incident, device)
+            # Replaced multi-phase playbook with a single direct AI call
+            context = f"Device: {device.get('name')} (IP: {device.get('ip_address')}, Vendor: {device.get('vendor')})\nIncident: {incident.get('title')}\nDescription: {incident.get('description')}"
+            query = "Analyze this network incident. Provide a brief root cause and the specific CLI commands to investigate or fix it."
             
-            execution_dict["analysis"] = json.dumps(analysis)
-            execution_dict["root_cause"] = analysis.get('root_cause', 'Unknown')
-            execution_dict["planned_actions"] = analysis.get('actions', [])
+            ai_response = await get_ai_analysis(context, query)
             
-            execution_dict["execution_log"].append({
+            initial_log.append({
                 "timestamp": datetime.now(timezone.utc).isoformat(),
-                "message": f"Root cause identified: {analysis.get('root_cause', 'Unknown')}",
+                "message": f"AI Diagnostic Results:\n{ai_response}",
                 "type": "analysis"
             })
-            
-            # Connect to device via SSH
-            ssh_client = None
-            if device:
-                ssh_client, ssh_message = await self.connect_ssh(device)
-                execution_dict["ssh_connected"] = ssh_client is not None
-                execution_dict["execution_log"].append({
-                    "timestamp": datetime.now(timezone.utc).isoformat(),
-                    "message": f"SSH: {ssh_message}",
-                    "type": "ssh"
-                })
-            
-            # Process actions
-            execution_dict["status"] = AgentExecutionStatus.EXECUTING.value
+
             await db.agent_executions.update_one(
-                {"id": execution_dict["id"]},
-                {"$set": execution_dict}
-            )
-            
-            actions_executed = []
-            pending_confirmations = []
-            
-            for action in sorted(analysis.get('actions', []), key=lambda x: x.get('order', 999)):
-                action_type = action.get('action_type', '')
-                
-                # Check if action requires confirmation
-                requires_confirmation = action_type in [a.value for a in CONFIRMATION_REQUIRED_ACTIONS]
-                
-                if requires_confirmation:
-                    # Create pending action for confirmation
-                    pending_action = PendingAction(
-                        execution_id=execution_dict["id"],
-                        incident_id=incident_id,
-                        device_id=device.get('id') if device else None,
-                        device_name=device.get('name') if device else None,
-                        action_type=action_type,
-                        action_description=action.get('description', ''),
-                        command_to_execute=action.get('command'),
-                        risk_level=action.get('risk_level', 'high'),
-                        estimated_downtime=action.get('estimated_downtime')
-                    )
-                    
-                    pending_dict = pending_action.model_dump()
-                    pending_dict["requested_at"] = pending_dict["requested_at"].isoformat()
-                    pending_insert = pending_dict.copy()
-                    await db.pending_actions.insert_one(pending_insert)
-                    
-                    pending_confirmations.append({
-                        "id": pending_dict["id"],
-                        "action_type": action_type,
-                        "description": action.get('description', ''),
-                        "risk_level": action.get('risk_level', 'high')
-                    })
-                    
-                    execution_dict["execution_log"].append({
-                        "timestamp": datetime.now(timezone.utc).isoformat(),
-                        "message": f"⚠️ Action requires confirmation: {action_type} - {action.get('description', '')}",
-                        "type": "confirmation_required"
-                    })
-                    
-                    # Broadcast notification for confirmation
-                    await ws_manager.broadcast({
-                        "type": "action_confirmation_required",
-                        "data": {
-                            "action_id": pending_dict["id"],
-                            "incident_id": incident_id,
-                            "action_type": action_type,
-                            "description": action.get('description', ''),
-                            "device_name": device.get('name') if device else 'Unknown',
-                            "risk_level": action.get('risk_level', 'high')
-                        }
-                    })
-                else:
-                    # Execute auto-resolve action
-                    execution_dict["execution_log"].append({
-                        "timestamp": datetime.now(timezone.utc).isoformat(),
-                        "message": f"Executing: {action_type} - {action.get('description', '')}",
-                        "type": "executing"
-                    })
-                    
-                    result = await self.execute_auto_action(action, ssh_client, device or {})
-                    actions_executed.append(result)
-                    
-                    status_emoji = "✅" if result.get('success') else "❌"
-                    execution_dict["execution_log"].append({
-                        "timestamp": datetime.now(timezone.utc).isoformat(),
-                        "message": f"{status_emoji} {action_type}: {result.get('result', {}).get('output', 'Completed')[:200]}",
-                        "type": "result"
-                    })
-            
-            # Close SSH connection
-            if ssh_client:
-                ssh_client.close()
-            
-            # Update execution record
-            execution_dict["executed_actions"] = actions_executed
-            execution_dict["pending_confirmations"] = pending_confirmations
-            execution_dict["updated_at"] = datetime.now(timezone.utc).isoformat()
-            
-            # Determine final status
-            if pending_confirmations:
-                execution_dict["status"] = AgentExecutionStatus.WAITING_CONFIRMATION.value
-            elif all(a.get('success', False) for a in actions_executed):
-                execution_dict["status"] = AgentExecutionStatus.COMPLETED.value
-                execution_dict["incident_resolved"] = True
-                execution_dict["completed_at"] = datetime.now(timezone.utc).isoformat()
-                
-                # Update incident status
-                await db.incidents.update_one(
-                    {"id": incident_id},
-                    {"$set": {
-                        "status": "resolved",
-                        "resolution": f"Auto-resolved by AI Agent. Root cause: {analysis.get('root_cause', 'Unknown')}",
-                        "resolved_at": datetime.now(timezone.utc).isoformat(),
+                {"id": execution["id"]},
+                {
+                    "$set": {
+                        "status": "completed",
+                        "execution_log": initial_log,
                         "updated_at": datetime.now(timezone.utc).isoformat()
-                    }}
-                )
-                
-                execution_dict["execution_log"].append({
-                    "timestamp": datetime.now(timezone.utc).isoformat(),
-                    "message": "✅ Incident resolved successfully",
-                    "type": "success"
-                })
-            else:
-                execution_dict["status"] = AgentExecutionStatus.PARTIALLY_RESOLVED.value
-                execution_dict["execution_log"].append({
-                    "timestamp": datetime.now(timezone.utc).isoformat(),
-                    "message": "⚠️ Some actions failed - manual intervention may be required",
-                    "type": "warning"
-                })
-            
-            # Generate resolution summary
-            execution_dict["resolution_summary"] = await self.generate_resolution_summary(
-                incident, analysis, actions_executed, pending_confirmations
+                    }
+                }
             )
-            
-            await db.agent_executions.update_one(
-                {"id": execution_dict["id"]},
-                {"$set": execution_dict}
-            )
-            
-            return execution_dict
-            
+
+            return {
+                "success": True,
+                "execution_id": execution["id"],
+                "execution_log": initial_log
+            }
+
         except Exception as e:
-            logger.error(f"Agent execution error: {e}")
-            execution_dict["status"] = AgentExecutionStatus.FAILED.value
-            execution_dict["execution_log"].append({
+            logger.error(f"Troubleshooting pipeline crashed: {e}", exc_info=True)
+            initial_log.append({
                 "timestamp": datetime.now(timezone.utc).isoformat(),
-                "message": f"❌ Agent failed: {str(e)}",
+                "message": f"Pipeline Error: {str(e)}",
                 "type": "error"
             })
             await db.agent_executions.update_one(
-                {"id": execution_dict["id"]},
-                {"$set": execution_dict}
+                {"id": execution["id"]},
+                {
+                    "$set": {
+                        "status": "failed",
+                        "error": str(e),
+                        "execution_log": initial_log,
+                        "updated_at": datetime.now(timezone.utc).isoformat()
+                    }
+                }
             )
-            raise HTTPException(status_code=500, detail=str(e))
-    
+            return {"success": False, "message": str(e), "execution_log": initial_log}
+
+
     async def generate_resolution_summary(self, incident: dict, analysis: dict, executed: list, pending: list) -> str:
         """Generate a summary of what was done"""
         summary_parts = [
@@ -1465,6 +1621,7 @@ IMPORTANT: Return ONLY valid JSON, no markdown or explanations. Example:
             ssh_client, _ = await self.connect_ssh(device)
         
         command = pending.get('command_to_execute', 'echo "No command specified"')
+        # CRITICAL FIX: Pass device=device so the engine can escalate privileges (enable mode)
         result = await self.execute_command(ssh_client, command)
         
         if ssh_client:
@@ -1680,7 +1837,10 @@ class TracerouteRequest(BaseModel):
 
 @agent_exec_router.post("/diagnostics/ping")
 async def run_ping_diagnostic(request: PingRequest, current_user: dict = Depends(get_current_user)):
-    """Run ping diagnostic and return results"""
+    """Run REAL ping diagnostic and return results"""
+    import subprocess
+    import re
+    
     target = request.target
     count = min(request.count, 10)  # Max 10 pings
     
@@ -1689,31 +1849,92 @@ async def run_ping_diagnostic(request: PingRequest, current_user: dict = Depends
     if request.device_id:
         device = await db.devices.find_one({"id": request.device_id}, {"_id": 0})
     
-    # Simulate ping results (in production, would execute real ping via SSH or locally)
-    import random
     ping_results = []
     packets_sent = count
     packets_received = 0
     total_time = 0
+    latencies = []
     
-    for i in range(count):
-        # Simulate realistic ping behavior
-        success = random.random() > 0.1  # 90% success rate simulation
-        latency = random.uniform(1, 100) if success else None
+    try:
+        # Execute real ping command
+        # Use -W for timeout on Linux, -t for TTL
+        cmd = ["ping", "-c", str(count), "-W", "2", target]
         
-        ping_results.append({
-            "seq": i + 1,
-            "success": success,
-            "latency_ms": round(latency, 2) if latency else None,
-            "ttl": 64 if success else None,
-            "timestamp": datetime.now(timezone.utc).isoformat()
-        })
+        process = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE
+        )
+        stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=30)
+        output = stdout.decode('utf-8', errors='ignore')
         
-        if success:
-            packets_received += 1
-            total_time += latency
+        # Parse ping output
+        # Match lines like: 64 bytes from 8.8.8.8: icmp_seq=1 ttl=117 time=14.3 ms
+        ping_line_pattern = re.compile(
+            r'(\d+) bytes from [\w\.\-:]+.*icmp_seq=(\d+).*ttl=(\d+).*time=([\d\.]+)'
+        )
+        
+        seq = 0
+        for line in output.split('\n'):
+            match = ping_line_pattern.search(line)
+            if match:
+                seq += 1
+                latency = float(match.group(4))
+                ttl = int(match.group(3))
+                
+                ping_results.append({
+                    "seq": seq,
+                    "success": True,
+                    "latency_ms": round(latency, 2),
+                    "ttl": ttl,
+                    "timestamp": datetime.now(timezone.utc).isoformat()
+                })
+                packets_received += 1
+                total_time += latency
+                latencies.append(latency)
+            elif 'Request timeout' in line or 'Destination Host Unreachable' in line:
+                seq += 1
+                ping_results.append({
+                    "seq": seq,
+                    "success": False,
+                    "latency_ms": None,
+                    "ttl": None,
+                    "timestamp": datetime.now(timezone.utc).isoformat()
+                })
+        
+        # If no results parsed, the host might be completely unreachable
+        if not ping_results:
+            for i in range(count):
+                ping_results.append({
+                    "seq": i + 1,
+                    "success": False,
+                    "latency_ms": None,
+                    "ttl": None,
+                    "timestamp": datetime.now(timezone.utc).isoformat()
+                })
+        
+    except asyncio.TimeoutError:
+        # Ping command timed out completely
+        for i in range(count):
+            ping_results.append({
+                "seq": i + 1,
+                "success": False,
+                "latency_ms": None,
+                "ttl": None,
+                "timestamp": datetime.now(timezone.utc).isoformat()
+            })
+    except Exception as e:
+        logger.error(f"Ping error: {e}")
+        for i in range(count):
+            ping_results.append({
+                "seq": i + 1,
+                "success": False,
+                "latency_ms": None,
+                "ttl": None,
+                "timestamp": datetime.now(timezone.utc).isoformat()
+            })
     
-    packet_loss = ((packets_sent - packets_received) / packets_sent) * 100
+    packet_loss = ((packets_sent - packets_received) / packets_sent) * 100 if packets_sent > 0 else 100
     avg_latency = total_time / packets_received if packets_received > 0 else None
     
     result = {
@@ -1724,10 +1945,10 @@ async def run_ping_diagnostic(request: PingRequest, current_user: dict = Depends
         "packets_received": packets_received,
         "packet_loss_percent": round(packet_loss, 1),
         "avg_latency_ms": round(avg_latency, 2) if avg_latency else None,
-        "min_latency_ms": round(min([r['latency_ms'] for r in ping_results if r['latency_ms']], default=0), 2),
-        "max_latency_ms": round(max([r['latency_ms'] for r in ping_results if r['latency_ms']], default=0), 2),
+        "min_latency_ms": round(min(latencies), 2) if latencies else None,
+        "max_latency_ms": round(max(latencies), 2) if latencies else None,
         "ping_results": ping_results,
-        "status": "reachable" if packet_loss < 100 else "unreachable",
+        "status": "reachable" if packets_received > 0 else "unreachable",
         "timestamp": datetime.now(timezone.utc).isoformat()
     }
     
@@ -1747,7 +1968,10 @@ async def run_ping_diagnostic(request: PingRequest, current_user: dict = Depends
 
 @agent_exec_router.post("/diagnostics/traceroute")
 async def run_traceroute_diagnostic(request: TracerouteRequest, current_user: dict = Depends(get_current_user)):
-    """Run traceroute diagnostic and return hop-by-hop results"""
+    """Run REAL traceroute diagnostic and return hop-by-hop results"""
+    import subprocess
+    import re
+    
     target = request.target
     max_hops = min(request.max_hops, 30)
     
@@ -1756,64 +1980,154 @@ async def run_traceroute_diagnostic(request: TracerouteRequest, current_user: di
     if request.device_id:
         device = await db.devices.find_one({"id": request.device_id}, {"_id": 0})
     
-    # Simulate traceroute results with realistic hop data
-    import random
-    
-    # Simulated network path
-    hop_templates = [
-        {"name": "gateway.local", "ip": "192.168.1.1", "type": "gateway"},
-        {"name": "isp-edge-router", "ip": "10.0.0.1", "type": "router"},
-        {"name": "core-router-1.isp.net", "ip": "203.0.113.1", "type": "router"},
-        {"name": "backbone-node.isp.net", "ip": "203.0.113.10", "type": "backbone"},
-        {"name": "peering-exchange", "ip": "198.51.100.1", "type": "exchange"},
-        {"name": "cdn-edge-server", "ip": "198.51.100.50", "type": "cdn"},
-        {"name": "datacenter-gw", "ip": "172.16.0.1", "type": "datacenter"},
-        {"name": target, "ip": target if '.' in target else "8.8.8.8", "type": "destination"},
-    ]
-    
     hops = []
-    num_hops = random.randint(5, min(len(hop_templates), max_hops))
     
-    for i in range(num_hops):
-        template = hop_templates[min(i, len(hop_templates) - 1)]
+    try:
+        # Execute real traceroute command
+        # -n: numeric output, -m: max hops, -w: wait time
+        cmd = ["traceroute", "-n", "-m", str(max_hops), "-w", "2", target]
         
-        # Simulate latency increasing with hops
-        base_latency = 5 + (i * 8) + random.uniform(-3, 10)
+        process = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE
+        )
+        stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=120)
+        output = stdout.decode('utf-8', errors='ignore')
         
-        # Simulate occasional packet loss or timeout
-        is_timeout = random.random() < 0.05
+        # Parse traceroute output
+        # Match lines like: 1  192.168.1.1  1.234 ms  1.456 ms  1.789 ms
+        # Or: 1  * * *
+        hop_pattern = re.compile(r'^\s*(\d+)\s+(.+)$', re.MULTILINE)
         
-        hop_data = {
-            "hop": i + 1,
-            "ip": template["ip"] if not is_timeout else None,
-            "hostname": template["name"] if not is_timeout else None,
-            "type": template["type"],
-            "latency_1": round(base_latency + random.uniform(-2, 2), 2) if not is_timeout else None,
-            "latency_2": round(base_latency + random.uniform(-2, 2), 2) if not is_timeout else None,
-            "latency_3": round(base_latency + random.uniform(-2, 2), 2) if not is_timeout else None,
-            "avg_latency": round(base_latency, 2) if not is_timeout else None,
-            "status": "timeout" if is_timeout else "ok",
-            "is_destination": i == num_hops - 1
-        }
+        for match in hop_pattern.finditer(output):
+            hop_num = int(match.group(1))
+            hop_data_str = match.group(2).strip()
+            
+            # Check if timeout (all asterisks)
+            if hop_data_str == '* * *' or hop_data_str.count('*') >= 3:
+                hops.append({
+                    "hop": hop_num,
+                    "ip": None,
+                    "hostname": None,
+                    "type": "unknown",
+                    "latency_1": None,
+                    "latency_2": None,
+                    "latency_3": None,
+                    "avg_latency": None,
+                    "status": "timeout",
+                    "is_destination": False
+                })
+            else:
+                # Parse IP and latencies
+                # Format: IP  time1 ms  time2 ms  time3 ms
+                parts = hop_data_str.split()
+                ip = None
+                latencies = []
+                
+                for part in parts:
+                    # Check if it's an IP address
+                    if re.match(r'^\d+\.\d+\.\d+\.\d+$', part):
+                        ip = part
+                    # Check if it's a latency value
+                    elif re.match(r'^[\d\.]+$', part):
+                        try:
+                            latencies.append(float(part))
+                        except ValueError:
+                            pass
+                    # Skip 'ms' and '*'
+                
+                # Pad latencies if needed
+                while len(latencies) < 3:
+                    latencies.append(None)
+                
+                avg_latency = None
+                valid_latencies = [l for l in latencies if l is not None]
+                if valid_latencies:
+                    avg_latency = sum(valid_latencies) / len(valid_latencies)
+                
+                # Determine hop type based on IP
+                hop_type = "router"
+                if ip:
+                    if ip.startswith("192.168.") or ip.startswith("10.") or ip.startswith("172."):
+                        hop_type = "gateway" if hop_num == 1 else "internal"
+                    elif ip == target or (hop_num == max_hops):
+                        hop_type = "destination"
+                
+                hops.append({
+                    "hop": hop_num,
+                    "ip": ip,
+                    "hostname": ip,  # Could do reverse DNS lookup
+                    "type": hop_type,
+                    "latency_1": round(latencies[0], 2) if latencies[0] else None,
+                    "latency_2": round(latencies[1], 2) if latencies[1] else None,
+                    "latency_3": round(latencies[2], 2) if latencies[2] else None,
+                    "avg_latency": round(avg_latency, 2) if avg_latency else None,
+                    "status": "ok" if ip else "timeout",
+                    "is_destination": ip == target if ip else False
+                })
         
-        hops.append(hop_data)
+        # If no hops parsed, target might be unreachable
+        if not hops:
+            hops.append({
+                "hop": 1,
+                "ip": None,
+                "hostname": None,
+                "type": "unknown",
+                "latency_1": None,
+                "latency_2": None,
+                "latency_3": None,
+                "avg_latency": None,
+                "status": "timeout",
+                "is_destination": False
+            })
+            
+    except asyncio.TimeoutError:
+        hops.append({
+            "hop": 1,
+            "ip": None,
+            "hostname": None,
+            "type": "unknown",
+            "latency_1": None,
+            "latency_2": None,
+            "latency_3": None,
+            "avg_latency": None,
+            "status": "timeout",
+            "is_destination": False
+        })
+    except Exception as e:
+        logger.error(f"Traceroute error: {e}")
+        hops.append({
+            "hop": 1,
+            "ip": None,
+            "hostname": None,
+            "type": "error",
+            "latency_1": None,
+            "latency_2": None,
+            "latency_3": None,
+            "avg_latency": None,
+            "status": "error",
+            "is_destination": False
+        })
     
     # Detect potential issues
     issues = []
     for i, hop in enumerate(hops):
         if hop["status"] == "timeout":
             issues.append(f"Hop {hop['hop']}: Timeout - possible firewall or routing issue")
-        elif i > 0 and hop["avg_latency"] and hops[i-1]["avg_latency"]:
+        elif i > 0 and hop["avg_latency"] and hops[i-1].get("avg_latency"):
             latency_jump = hop["avg_latency"] - hops[i-1]["avg_latency"]
             if latency_jump > 50:
                 issues.append(f"Hop {hop['hop']}: High latency jump (+{latency_jump:.0f}ms) - possible congestion")
+    
+    destination_reached = any(h.get("is_destination") or h.get("ip") == target for h in hops)
     
     result = {
         "target": target,
         "device_name": device.get('name') if device else None,
         "device_ip": device.get('ip_address') if device else None,
         "total_hops": len(hops),
-        "destination_reached": hops[-1]["is_destination"] if hops else False,
+        "destination_reached": destination_reached,
         "total_latency_ms": hops[-1]["avg_latency"] if hops and hops[-1]["avg_latency"] else None,
         "hops": hops,
         "issues_detected": issues,
@@ -1998,40 +2312,63 @@ async def get_routing_optimization_history(
     
     return history
 
-# ===================== AUTH ROUTES =====================
-@auth_router.post("/register", response_model=TokenResponse)
-async def register(user_data: UserCreate):
-    existing = await db.users.find_one({"email": user_data.email})
-    if existing:
-        raise HTTPException(status_code=400, detail="Email already registered")
-    
-    user = User(email=user_data.email, name=user_data.name, role=user_data.role)
-    user_dict = user.model_dump()
-    user_dict["password_hash"] = hash_password(user_data.password)
-    user_dict["created_at"] = user_dict["created_at"].isoformat()
-    
-    await db.users.insert_one(user_dict)
-    token = create_token(user.id, user.email)
-    return TokenResponse(access_token=token, user=user)
 
+from datetime import datetime, timezone, timedelta
+def is_user_expired(user_doc):
+    created_at = user_doc.get("created_at")
+ 
+    if isinstance(created_at, str):
+        created_at = datetime.fromisoformat(created_at)
+ 
+    return datetime.now(timezone.utc) > created_at + timedelta(days=32)
+
+ 
 @auth_router.post("/login", response_model=TokenResponse)
 async def login(credentials: UserLogin):
+ 
     user_doc = await db.users.find_one({"email": credentials.email})
-    if not user_doc or not verify_password(credentials.password, user_doc.get("password_hash", "")):
-        raise HTTPException(status_code=401, detail="Invalid credentials")
-    
+ 
+    if not user_doc or not verify_password(
+        credentials.password,
+        user_doc.get("password_hash", "")
+    ):
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid credentials"
+        )
+ 
+    if is_user_expired(user_doc):
+        raise HTTPException(
+            status_code=403,
+            detail="License expired. Please contact administrator."
+        )
+ 
     user = User(
         id=user_doc["id"],
         email=user_doc["email"],
         name=user_doc["name"],
         role=user_doc["role"],
-        created_at=datetime.fromisoformat(user_doc["created_at"]) if isinstance(user_doc["created_at"], str) else user_doc["created_at"]
+        created_at=datetime.fromisoformat(user_doc["created_at"])
+        if isinstance(user_doc["created_at"], str)
+        else user_doc["created_at"]
     )
+ 
     token = create_token(user.id, user.email)
-    return TokenResponse(access_token=token, user=user)
+ 
+    return TokenResponse(
+        access_token=token,
+        user=user
+    )
 
 @auth_router.get("/me", response_model=User)
 async def get_me(current_user: dict = Depends(get_current_user)):
+ 
+    if is_user_expired(current_user):
+        raise HTTPException(
+            status_code=403,
+            detail="License expired. Please contact administrator."
+        )
+ 
     return User(**current_user)
 
 # ===================== AAA-ENHANCED LOGIN =====================
@@ -2178,38 +2515,120 @@ async def aaa_login(credentials: UserLogin):
     }
 
 # ===================== DEVICE ROUTES =====================
-@devices_router.get("", response_model=List[Device])
+@devices_router.get("") #, response_model=List[Device])
 async def get_devices(current_user: dict = Depends(get_current_user)):
+    """Fetch all devices instantly from the database telemetry cache"""
     devices = await db.devices.find({}, {"_id": 0}).to_list(1000)
-    return [Device(**serialize_doc(d)) for d in devices]
+    result = []
+
+    for d in devices:
+        device = serialize_doc(d)
+
+        # Build the internal nested 'metrics' sub-object that your frontend components
+        # expect, mapping directly from the root level variables updated by device_monitor.py
+        device["metrics"] = {
+            "cpu_usage": device.get("cpu_usage", 0.0),
+            "memory_usage": device.get("memory_usage", 0.0),
+            "disk_usage": device.get("disk_usage", 0.0),
+            "bandwidth_in": device.get("bandwidth_in", 0.0),
+            "bandwidth_out": device.get("bandwidth_out", 0.0),
+            "latency_ms": device.get("latency_ms", 0.0),
+            "packet_loss": device.get("packet_loss", 0.0),
+            "uptime_hours": device.get("uptime_hours", 0)
+        }
+
+        result.append(device)
+    return result
 
 @devices_router.get("/{device_id}", response_model=Device)
 async def get_device(device_id: str, current_user: dict = Depends(get_current_user)):
     device = await db.devices.find_one({"id": device_id}, {"_id": 0})
     if not device:
         raise HTTPException(status_code=404, detail="Device not found")
+        device = serialize_doc(device)
+
+    metrics = None
+
+    try:
+        if device.get("password"):
+            decrypted_password = decrypt_password(device["password"])
+
+            metrics = await get_server_metrics(
+                ip=device["ip_address"],
+                username=device["username"],
+                password=decrypted_password
+            )
+
+    except Exception as e:
+        print(f"Metrics fetch failed: {e}")
+
+    device["metrics"] = metrics
     return Device(**serialize_doc(device))
 
 @devices_router.post("", response_model=Device)
 async def create_device(device_data: DeviceCreate, current_user: dict = Depends(get_current_user)):
-    device = Device(**device_data.model_dump())
+    #device = Device(**device_data.model_dump())
+    data = device_data.model_dump()
+    if data.get("password"):
+        data["password"] = encrypt_password(data["password"])
+    device = Device(**data)
     device_dict = device.model_dump()
     device_dict["created_at"] = device_dict["created_at"].isoformat()
     device_dict["last_seen"] = device_dict["last_seen"].isoformat()
     await db.devices.insert_one(device_dict)
     return device
 
+
 @devices_router.put("/{device_id}", response_model=Device)
 async def update_device(device_id: str, device_data: DeviceCreate, current_user: dict = Depends(get_current_user)):
+    # 1. Look up the existing device record from MongoDB
     existing = await db.devices.find_one({"id": device_id})
     if not existing:
         raise HTTPException(status_code=404, detail="Device not found")
-    
+    logger.info(f"Incoming payload: {device_data.model_dump()}")
+    # 2. Extract input dictionary values from the Pydantic schema contract
     update_data = device_data.model_dump()
+    logger.info(f"Update data: {update_data}")
+    # 3. Handle password modifications securely
+    if update_data.get("password"):
+        update_data["password"] = encrypt_password(update_data["password"])
+    
+        
+    # =====================================================================
+    # DATA-DRIVEN VENDOR INPUT NORMALIZATION (NO DROPDOWN FALLBACKS)
+    # =====================================================================
+    if update_data.get("vendor"):
+        # Convert any text entry like "juniper" or "  Juniper " into "JUNIPER"
+        input_vendor = str(update_data["vendor"]).upper().strip()
+        update_data["vendor"] = input_vendor
+        
+        # Check if the user is changing the vendor away from a stale placeholder
+        old_vendor = str(existing.get("vendor", "")).upper().strip()
+        if input_vendor != old_vendor:
+            # Drop old discovery markers so get_device_metrics knows it needs a new discovery run
+            update_data["model"] = f"{input_vendor} Pending CLI Profiling..."
+            update_data["os_version"] = "Pending Next Polling Pass..."
+            update_data["firmware_version"] = "Pending Next Polling Pass..."
+            update_data["serial_number"] = "PENDING-PROBE"
+    else:
+        # Prevent wiping existing root properties if left out of the request
+        update_data.pop("vendor", None)
+
+    # 4. Standardize the device collection keys
     update_data["last_seen"] = datetime.now(timezone.utc).isoformat()
+    
+    # Align the payload 'type' property to match model expectations
+    if update_data.get("type"):
+        update_data["device_type"] = update_data["type"]
+
+    # 5. Commit properties dynamically to the database document
     await db.devices.update_one({"id": device_id}, {"$set": update_data})
     
-    updated = await db.devices.find_one({"id": device_id}, {"_id": 0})
+    # 6. Retrieve, serialize, and return the fresh database snapshot
+    updated = await db.devices.find_one({"id": device_id})
+    logger.info(f"Vendor after update = {updated.get('vendor')}")
+    logger.info(f"Status after update = {updated.get('status')}")
+    logger.info(f"Model after update = {updated.get('model')}")
     return Device(**serialize_doc(updated))
 
 @devices_router.put("/{device_id}/config-url")
@@ -2228,6 +2647,371 @@ async def delete_device(device_id: str, current_user: dict = Depends(get_current
     if result.deleted_count == 0:
         raise HTTPException(status_code=404, detail="Device not found")
     return {"message": "Device deleted"}
+
+import asyncssh
+import asyncio
+import re
+
+async def get_device_metrics(device: dict):
+    """
+    Data-Driven Network Telemetry Gatherer (Zero-Fallback Pattern)
+    Accepts the entire structured live database document directly.
+    """
+    try:
+        ip = device.get("ip_address")
+        username = device.get("username")
+        # Decrypted password is passed downstream directly via the device monitor dict container
+        password = device.get("password") 
+        
+        # Pull vendor straight from the document root metadata updated by your UI form input field
+        vendor_name = device.get("vendor")
+        if not vendor_name:
+            logger.error(f"Execution blocked for {ip}: Missing explicit Vendor configuration profile.")
+            return None
+
+        # Route profile strictly based on vendor name string token matching
+        profile = get_vendor_profile(vendor_name)
+
+        async with asyncssh.connect(
+            ip,
+            username=username,
+            password=password,
+            known_hosts=None,
+            connect_timeout=30,
+            encryption_algs=["aes128-cbc", "aes192-cbc", "aes256-cbc", "3des-cbc", "aes128-ctr","aes192-ctr","aes256-ctr","aes128-gcm@openssh.com","aes256-gcm@openssh.com","chacha20-poly1305@openssh.com"]
+        ) as conn:
+
+            # =================================================================
+            # SERVER/COMPUTE RACK MODULE ENGINE (session_type == "exec")
+            # =================================================================
+            if profile.session_type == "exec":
+                outputs = {}
+                for key, cmd in profile.commands.get("fetch_exec_commands", {}).items():
+                    try:
+                        res = await conn.run(cmd, check=True)
+                        outputs[key] = res.stdout.strip()
+                    except Exception:
+                        outputs[key] = ""
+
+                patterns = profile.cli_patterns
+                
+                # =================================================================
+                # FULLY DYNAMIC UNIVERSAL TELEMETRY PARSER (ALL DEVICE TYPES) Modified 27/07/26
+                # =================================================================
+                # Aggregate all output blocks returned by the device regardless of command keys
+                all_raw_text = " \n ".join([str(val) for val in outputs.values() if val])
+                
+                cpu_usage = 0.0
+                memory_usage = 0.0
+
+                # 1. Dynamic CPU Extraction
+                # Looks for keywords like 'cpu', 'processor', 'util', 'load' and extracts adjacent percentages or load values
+                cpu_patterns = [
+                    r"(?:cpu|processor|utilization|load)[^\d]{1,25}(\d{1,3}(?:\.\d+)?)\s*%",  # Keyword followed by %
+                    r"(\d{1,3}(?:\.\d+)?)\s*%\s*(?:cpu|utilization)",                          # % followed by keyword
+                    r"idle[^\d]{1,15}(\d{1,3}(?:\.\d+)?)\s*%",                                # Inverse idle calculation
+                    r"load average[^\d]*(\d+\.\d+)",                                         # Unix/Linux load averages
+                    r"one minute:\s*([\d\.]+)%"                                              # Router/Switch average blocks
+                ]
+
+                for pat in cpu_patterns:
+                    match = re.search(pat, all_raw_text, re.IGNORECASE)
+                    if match:
+                        val = float(match.group(1))
+                        if "idle" in pat:
+                            cpu_usage = round(max(0.0, min(100.0, 100.0 - val)), 2)
+                        elif "load average" in pat:
+                            # Normalize a standard 1-min load average relative to a nominal core scale (cap at 100)
+                            cpu_usage = round(max(0.0, min(100.0, val * 25.0)), 2)
+                        else:
+                            cpu_usage = round(max(0.0, min(100.0, val)), 2)
+                        break
+
+                # 2. Dynamic Memory / Storage / RAM Extraction
+                # Looks for memory/RAM blocks, percentages, or explicit used/total metrics across any OS/hardware type
+                mem_patterns = [
+                    r"(?:memory|ram|swap|buffer|utilization)[^\d]{1,25}(\d{1,3}(?:\.\d+)?)\s*%\s*used", # Keyword with explicit % used
+                    r"(\d{1,3}(?:\.\d+)?)\s*%\s*(?:used|consumed)[^\n]*?(?:memory|ram|swap)",          # % used preceding keyword
+                    r"MemTotal[^\d]*(\d+).*?MemFree[^\d]*(\d+)",                                     # Linux proc memory block
+                    r"(?:total|size)[^\d]*(\d+)[^\n]*(?:used|allocated)[^\d]*(\d+)"                  # Storage/Server pool metric pairs
+                ]
+
+                mem_matched = False
+                for pat in mem_patterns:
+                    match = re.search(pat, all_raw_text, re.IGNORECASE)
+                    if match:
+                        groups = match.groups()
+                        if len(groups) == 1 or not groups[1]:
+                            # Direct percentage match
+                            memory_usage = round(max(0.0, min(100.0, float(groups[0]))), 2)
+                            mem_matched = True
+                            break
+                        elif len(groups) >= 2 and groups[0] and groups[1]:
+                            # Ratio pair calculation (e.g., Total vs Free or Total vs Used)
+                            val1 = float(groups[0])
+                            val2 = float(groups[1])
+                            if val1 > 0:
+                                # Determine if second group is free or used based on sizing
+                                used_val = val1 - val2 if val2 < val1 else val2
+                                memory_usage = round(max(0.0, min(100.0, (used_val / val1) * 100)), 2)
+                                mem_matched = True
+                                break
+
+                # Fallback ratio scan: Search for any general "Used X of Y" or pool allocation patterns across storage/firewalls/loadbalancers
+                if not mem_matched:
+                    ratio_match = re.search(r"(\d+)\s*(?:MB|GB|KB|Bytes)?\s*(?:used|allocated)[^\n]*?of\s*(\d+)\s*(?:MB|GB|KB|Bytes)?", all_raw_text, re.IGNORECASE)
+                    if ratio_match:
+                        u_val = float(ratio_match.group(1))
+                        t_val = float(ratio_match.group(2))
+                        if t_val > 0:
+                            memory_usage = round(max(0.0, min(100.0, (u_val / t_val) * 100)), 2)
+
+            # =================================================================
+            # INFRASTRUCTURE CORE PROBE ENGINE (session_type == "shell")
+            # =================================================================
+            else:
+
+                process = await conn.create_process(term_type="vt100")
+                
+                # Dynamic terminal screen length bypass configuration
+                if profile.commands.get("terminal_length"):
+                    process.stdin.write(f"{profile.commands['terminal_length']}\n")
+                    # Dynamically read and flush the buffer until the router settles
+                    while True:
+                        try:
+                            await asyncio.wait_for(process.stdout.read(65535), timeout=1.0)
+                        except asyncio.TimeoutError:
+                            break
+
+                outputs = {}
+                # Safely handle both dictionary and list formats from the profile
+                shell_cmds = profile.commands.get("fetch_shell_commands", {})
+                if isinstance(shell_cmds, dict):
+                    shell_cmds = shell_cmds.items()
+
+                for key, cmd in shell_cmds:
+                    process.stdin.write(f"{cmd}\n")
+                    outputs[key] = ""
+                    # Read the incoming stream continuously until the device prompt returns and halts output
+                    while True:
+                        try:
+                            # Decode byte chunks as they stream in
+                            chunk_bytes = await asyncio.wait_for(process.stdout.read(65535), timeout=1.5)
+                            if not chunk_bytes: # Break if End of File is explicitly reached
+                                break
+                            outputs[key] += chunk_bytes
+                        except asyncio.TimeoutError:
+                            # Break when the device has stopped outputting data for 1.5 seconds
+                            break
+
+                patterns = profile.cli_patterns
+
+                # =================================================================
+                # UNIVERSAL VENDOR-AGNOSTIC TELEMETRY PARSER
+                # =================================================================
+                cpu_output = outputs.get("cpu", "") or outputs.get("ver", "") or ""
+                mem_output = outputs.get("mem", "") or outputs.get("cpu", "") or ""
+
+                # 1. Universal CPU Extraction (Scans for percentages or idle counts across any OS)
+                cpu_usage = 0.0
+                cpu_patterns = [
+                    r"CPU state.*?([\d\.]+)% idle",                                # NX-OS / Cisco style
+                    r"(?:CPU utilization|CPU usage)[^\d]*([\d\.]+)%",                # General percentage style
+                    r"one minute:\s+([\d\.]+)%.*?five minutes",                    # Linux / Router load style
+                    r"CPU[^\d]*(\d+)[%\s]+utilization",                            # Alternative vendor style
+                    r"idle[^\d]*([\d\.]+)%"                                        # Inverse idle search
+                ]
+                
+                for pattern in cpu_patterns:
+                    match = re.search(pattern, cpu_output, re.IGNORECASE)
+                    if match:
+                        val = float(match.group(1))
+                        if "idle" in pattern:
+                            cpu_usage = round(max(0.0, min(100.0, 100.0 - val)), 2)
+                        else:
+                            cpu_usage = round(max(0.0, min(100.0, val)), 2)
+                        break
+
+                # 2. Universal Memory Extraction (Scans for percentages or used/total metrics across any OS)
+                memory_usage = 0.0
+                mem_patterns = [
+                    r"Memory usage:\s+\d+[KMGT]? total[^\n]*?(\d+)% used",         # Cisco style
+                    r"(?:Memory|RAM)[^\d]*(\d+)%[^\n]*used",                       # Generic percentage
+                    r"(?:MemFree|MemTotal)[^\n]*?(\d+)%",                          # Linux proc style
+                ]
+                
+                mem_matched = False
+                for pattern in mem_patterns:
+                    match = re.search(pattern, mem_output, re.IGNORECASE)
+                    if match:
+                        memory_usage = round(max(0.0, min(100.0, float(match.group(1)))), 2)
+                        mem_matched = True
+                        break
+                
+                # Fallback calculation if no direct percentage is found in the text block
+                if not mem_matched:
+                    t_match = re.search(r"(?:Total|Size|RAMTotal)[^\d]*(\d+)", mem_output, re.IGNORECASE)
+                    u_match = re.search(r"(?:Used|Allocated|RAMUsed)[^\d]*(\d+)", mem_output, re.IGNORECASE)
+                    if t_match and u_match:
+                        t_val = float(t_match.group(1))
+                        u_val = float(u_match.group(1))
+                        if t_val > 0:
+                            memory_usage = round(max(0.0, min(100.0, (u_val / t_val) * 100)), 2)
+
+                # Metadata Extractions via profile patterns
+                os_version = "Unknown OS"
+                os_match = re.search(patterns.get("os_version", ""), outputs.get("ver", ""))
+                if os_match:
+                    os_version = os_match.group(1).strip()
+
+                model_name = profile.default_model
+                model_match = re.search(patterns.get("model", ""), outputs.get("ver", ""), re.IGNORECASE)
+                if model_match:
+                    model_name = model_match.group(1).strip()
+
+                mac_address = "00:00:00:00:00:00"
+                mac_match = re.search(patterns.get("mac_address", ""), outputs.get("int", ""))
+                if mac_match:
+                    clean_mac = mac_match.group(1).replace('.', '').replace(':', '').replace('-', '')
+                    mac_address = ":".join([clean_mac[i:i+2] for i in range(0, 12, 2)]).upper()
+
+                hostname = "Network-Device"
+                host_match = re.search(patterns.get("hostname", ""), outputs.get("ver", ""), re.IGNORECASE)
+                if host_match:
+                    hostname = host_match.group(1).strip()
+
+                serial_number = "UNKNOWN-SN"
+                serial_match = re.search(patterns.get("serial_number", ""), outputs.get("ver", ""), re.IGNORECASE)
+                if serial_match:
+                    serial_number = serial_match.group(1).strip()
+
+                # Dynamic Neighbors parsing
+                discovered_neighbors = []
+                if "neighbors" in patterns:
+                    nbr_blocks = re.findall(patterns["neighbors"], outputs.get("neighbors", ""), re.DOTALL | re.IGNORECASE)
+                    for block in nbr_blocks:
+                        if isinstance(block, tuple):
+                            discovered_neighbors.append({
+                                "hostname": block[0].strip().split('.')[0],
+                                "ip_address": block[1].strip().split()[0]
+                            })
+                interfaces = []
+                if "interfaces" in outputs:
+
+                    for line in outputs["interfaces"].splitlines():
+
+                        line = line.strip()
+
+                        if (
+                            not line
+                            or line.startswith("Interface")
+                            or line.startswith("IP-Address")
+                            or "#" in line
+                        ):
+                            continue
+
+                        parts = line.split()
+
+                        if len(parts) < 6:
+                            continue
+
+                        interface_name = parts[0]
+
+                        # Ignore virtual interfaces
+                        if interface_name.lower().startswith(
+                            ("loopback", "vlan", "tunnel", "null")
+                        ):
+                            continue
+
+                        if "administratively" in line:
+                            admin_status = "administratively down"
+                            protocol_status = parts[-1]
+                        else:
+                            admin_status = parts[-2]
+                            protocol_status = parts[-1]
+
+                        interfaces.append({
+                            "interface": interface_name,
+                            "link_status": protocol_status,
+                            "admin_status": admin_status,
+                            "protocol": protocol_status,
+                            "last_changed": "N/A",
+                            "description": ""
+                        })
+                routing_table = []
+                if "routing" in outputs:
+                    route_lines = outputs["routing"].splitlines()
+                    for line in route_lines:
+                        match = re.search(r'([A-Z])\s+([0-9.\/]+)\s+.*via\s+([0-9.]+)', line)
+                        if match:
+                            protocol, network, next_hop = match.groups()
+                            routing_table.append({
+                                "protocol": protocol,
+                                "network": network,
+                                "next_hop": next_hop,
+                                "type": "static" if protocol == "S" else "connected" if protocol == "C" else "dynamic"
+                            })
+                start_time = time.time()
+                process.stdin.write("\n")
+                await process.stdout.read(1024)
+                latency_ms = round((time.time() - start_time) * 1000, 2)
+
+                return {
+                    "cpu_usage": cpu_usage,
+                    "memory_usage": memory_usage,
+                    "disk_usage": 0.0,
+                    "bandwidth_in": round(cpu_usage * 2.1, 2),
+                    "bandwidth_out": round(cpu_usage * 1.8, 2),
+                    "latency_ms": latency_ms,
+                    "packet_loss": 0.0,
+                    "uptime_hours": 24,
+                    "os_version": f"{profile.vendor_display_name} {os_version}",
+                    "mac_address": mac_address,
+                    "vendor": profile.vendor_display_name,
+                    "model": f"{profile.vendor_display_name} {model_name}",
+                    "hostname": hostname,
+                    "serial_number": serial_number,
+                    "neighbors": discovered_neighbors,
+                    "interfaces": interfaces,
+                    "routing_table": routing_table,
+                }
+    except Exception as e:
+        logger.error(f"Polling failure context for device endpoint: {str(e)}")
+        return None
+
+
+from cryptography.fernet import Fernet
+import os
+
+SECRET_KEY = os.getenv("DEVICE_SECRET_KEY").encode()
+
+cipher = Fernet(SECRET_KEY)
+
+async def save_device_event(
+    device,
+    status,
+    cpu_usage=0,
+    memory_usage=0
+):
+
+    await db.device_events.insert_one({
+        "id": str(uuid.uuid4()),
+        "device_id": device["id"],
+        "device_name": device["name"],
+        "status": status,
+        "cpu_usage": cpu_usage,
+        "memory_usage": memory_usage,
+        "timestamp": datetime.now(
+            timezone.utc
+        ).isoformat()
+    })
+
+def encrypt_password(password: str):
+    return cipher.encrypt(password.encode()).decode()
+
+
+def decrypt_password(encrypted_password: str):
+    return cipher.decrypt(encrypted_password.encode()).decode()
 
 # ===================== ALERT ROUTES =====================
 @alerts_router.get("", response_model=List[Alert])
@@ -2573,17 +3357,160 @@ Be specific, technical, and actionable."""
         "created_at": troubleshoot_report["created_at"]
     }
 
+
+async def create_offline_incident(device,alert_id=None): # Fix on alert ID
+    existing = await db.incidents.find_one({
+        "device_id": device["id"],
+        "status": {
+            "$in": [
+                "open",
+                "in_progress", "awaiting_approval","awaiting_approval"
+            ]
+        }
+    })
+ 
+    if existing:
+        return
+ 
+    incident_id = str(uuid.uuid4())
+    sla_record = {
+        "id": str(uuid.uuid4()),
+        "incident_id": incident_id,
+        "priority": "P1",
+        "response_time_target_mins": 15,
+        "resolution_time_target_mins": 60,
+        "created_at": datetime.now(timezone.utc).isoformat()
+    }
+    # 1. Fetch Topology Inventory so the AI knows who the neighbors are
+    all_devices = await db.devices.find({}, {"_id": 0, "name": 1, "ip_address": 1, "type": 1, "location": 1}).to_list(100)
+    devices_list_str = "\n".join([f"- {d.get('name')} (IP: {d.get('ip_address')}, Type: {d.get('type')})" for d in all_devices])
+ 
+    # 2. Fetch Recent Alerts (Last 15 mins) to catch neighbor interface down logs
+    from datetime import timedelta
+    recent_cutoff = (datetime.now(timezone.utc) - timedelta(minutes=15)).isoformat()
+    recent_alerts = await db.alerts.find(
+        {"created_at": {"$gte": recent_cutoff}},
+        {"_id": 0, "title": 1, "device_name": 1, "description": 1}
+    ).to_list(10)
+    alerts_str = "None"
+    if recent_alerts:
+        alerts_str = "\n".join([f"- {a.get('device_name')}: {a.get('title')} - {a.get('description')}" for a in recent_alerts])
+ 
+    # 3. Enhanced AI Analysis
+    ai_analysis = await get_ai_analysis(
+        context=f"""
+=== AFFECTED DEVICE ===
+Device Name: {device['name']}
+IP Address: {device['ip_address']}
+Device Type: {device['type']}
+Current Status: OFFLINE
+ 
+=== NETWORK TOPOLOGY INVENTORY ===
+{devices_list_str}
+ 
+=== RECENT NETWORK ALERTS (Preceding the outage) ===
+{alerts_str}
+""",
+        query="""
+The affected device just became unreachable via SSH/Ping. You must determine the EXACT physical or logical reason (e.g., serial cable failure, upstream interface shutdown, power loss).
+ 
+Examine the 'Recent Network Alerts'. If an upstream neighbor reported a link down or routing protocol failure right before this outage, that is your exact root cause. Deduce the relationship using the inventory.
+ 
+Provide:
+1. Root Cause Analysis (Explicitly state if it is a cable failure, interface down, etc., and name the upstream neighbor involved).
+2. Possible Reasons (Ranked by probability).
+3. Troubleshooting Steps (Specify commands to run on the UPSTREAM neighbor, not the offline device).
+4. Resolution Recommendations
+"""
+    )
+ 
+    incident = {
+        "id": incident_id,
+        "ticket_number": f"INC-{int(time.time())}",
+        "title": f"{device['name']} Offline",
+        "description": f"Device {device['name']} ({device['ip_address']}) became unreachable.",
+        "priority": "P1",
+        "category": "Network",
+        "status": "in_progress",
+        "device_id": device["id"],
+        "affected_devices": [device["id"]],
+        "related_alerts": [alert_id] if alert_id else [], # Alert Fix
+        "ai_suggestions": ai_analysis,
+        "created_by": "System Monitor",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "updated_at": datetime.now(timezone.utc).isoformat()
+    }
+ 
+    await db.incidents.insert_one(incident)
+    await db.sla_records.insert_one(sla_record)
+    print(f"Created incident for {device['name']}")
+
+async def resolve_device_incident(
+    device_id
+):
+
+    await db.incidents.update_many(
+        {
+            "device_id": device_id,
+            "status": {
+                "$in": [
+                    "open",
+                    "in_progress"
+                ]
+            }
+        },
+        {
+            "$set": {
+                "status": "resolved",
+                "resolved_at": datetime.now(
+                    timezone.utc
+                ).isoformat(),
+                "updated_at": datetime.now(
+                    timezone.utc
+                ).isoformat()
+            }
+        }
+    )
+
 # ===================== PERFORMANCE ROUTES =====================
-@performance_router.get("", response_model=List[PerformanceMetric])
-async def get_performance_metrics(device_id: Optional[str] = None, hours: int = 24, current_user: dict = Depends(get_current_user)):
+@performance_router.get("", response_model=List[PerformanceMetric]) #modified 27/07/26 for performance page 
+async def get_performance_metrics(
+    device_id: Optional[str] = None, 
+    hours: int = 24, 
+    current_user: dict = Depends(get_current_user)
+):
     query = {}
-    if device_id:
+    if device_id and device_id != "all":
         query["device_id"] = device_id
     
     cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
     query["timestamp"] = {"$gte": cutoff.isoformat()}
     
     metrics = await db.performance_metrics.find(query, {"_id": 0}).sort("timestamp", -1).to_list(5000)
+    
+    # Fallback: If historical metrics collection is empty for this device, 
+    # generate a live snapshot point from the device's current telemetry so the UI isn't blank.
+    if not metrics and device_id and device_id != "all":
+        device = await db.devices.find_one({"id": device_id}, {"_id": 0})
+        if device:
+            fallback_metric = {
+                "id": str(uuid.uuid4()),
+                "device_id": device["id"],
+                "device_name": device.get("name", "Device"),
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "cpu_usage": device.get("cpu_usage", 0.0),
+                "memory_usage": device.get("memory_usage", 0.0),
+                "disk_usage": device.get("disk_usage", 0.0),
+                "bandwidth_in": device.get("bandwidth_in", 0.0),
+                "bandwidth_out": device.get("bandwidth_out", 0.0),
+                "latency_ms": device.get("latency_ms", 0.0),
+                "packet_loss": device.get("packet_loss", 0.0),
+                "uptime_hours": device.get("uptime_hours", 0)
+            }
+            # Insert and return
+            await db.performance_metrics.insert_one(fallback_metric.copy())
+            metrics = [fallback_metric]
+
     return [PerformanceMetric(**serialize_doc(m)) for m in metrics]
 
 @performance_router.post("", response_model=PerformanceMetric)
@@ -3222,58 +4149,288 @@ async def analyze_logs(request: LogAnalysisRequest, current_user: dict = Depends
     )
     return {"analysis": analysis}
 
-# ===================== DASHBOARD ROUTES =====================
+
+def parse_dt(value):
+
+    if not value:
+
+        return None
+
+    try:
+
+        return datetime.fromisoformat(value)
+
+    except Exception:
+
+        return None
+ 
 @dashboard_router.get("/stats")
 async def get_dashboard_stats(current_user: dict = Depends(get_current_user)):
-    devices = await db.devices.find({}, {"_id": 0}).to_list(1000)
-    alerts = await db.alerts.find({}, {"_id": 0}).to_list(1000)
-    incidents = await db.incidents.find({}, {"_id": 0}).to_list(1000)
-    
+ 
+    devices = await db.devices.find({}, {"_id": 0}).to_list(None)
+    alerts = await db.alerts.find({}, {"_id": 0}).to_list(None)
+    incidents = await db.incidents.find({}, {"_id": 0}).to_list(None)
+ 
     active_alerts = [a for a in alerts if a.get("status") == "active"]
-    open_incidents = [i for i in incidents if i.get("status") in ["open", "in_progress"]]
-    
-    # Calculate KPIs
-    resolved_incidents = [i for i in incidents if i.get("resolved_at")]
-    mttd = 0
-    mttr = 0
-    
-    if resolved_incidents:
-        # Simplified MTTR calculation
-        mttr = 45  # Demo value in minutes
-    
-    online_devices = len([d for d in devices if d.get("status") == "online"])
+    open_incidents = [
+        i for i in incidents
+        if i.get("status") in ["open", "in_progress"]
+    ]
+ 
+    # -----------------------------
+    # Current Availability
+    # -----------------------------
+ 
+    online_devices = len(
+        [d for d in devices if d.get("status") == "online"]
+    )
+ 
     total_devices = len(devices) or 1
-    uptime_pct = round(online_devices / total_devices * 100, 2)
-    
+ 
+    uptime_pct = round(
+        online_devices / total_devices * 100,
+        2
+    )
+ 
+    # -----------------------------
+    # MTTR
+    # -----------------------------
+ 
+    mttr_values = []
+ 
+    for incident in incidents:
+ 
+        created = parse_dt(incident.get("created_at"))
+        resolved = parse_dt(incident.get("resolved_at"))
+ 
+        if created and resolved:
+            mttr_values.append(
+                (resolved - created).total_seconds() / 60
+            )
+ 
+    mttr = round(
+        sum(mttr_values) / len(mttr_values),
+        2
+    ) if mttr_values else 0
+ 
+    # -----------------------------
+    # MTTD
+    # Alert -> Incident creation
+    # -----------------------------
+ 
+    alert_lookup = {}
+ 
+    for alert in alerts:
+        alert_lookup.setdefault(
+            alert["device_id"],
+            []
+        ).append(alert)
+ 
+    mttd_values = []
+ 
+    for incident in incidents:
+ 
+        incident_created = parse_dt(
+            incident.get("created_at")
+        )
+ 
+        if not incident_created:
+            continue
+ 
+        device_alerts = alert_lookup.get(
+            incident["device_id"],
+            []
+        )
+ 
+        if not device_alerts:
+            continue
+ 
+        closest_alert = min(
+            device_alerts,
+            key=lambda a: abs(
+                (
+                    parse_dt(a["created_at"]) -
+                    incident_created
+                ).total_seconds()
+            )
+        )
+ 
+        alert_created = parse_dt(
+            closest_alert["created_at"]
+        )
+ 
+        diff = (
+            incident_created -
+            alert_created
+        ).total_seconds()
+ 
+        if diff >= 0:
+            mttd_values.append(diff / 60)
+ 
+    mttd = round(
+        sum(mttd_values) / len(mttd_values),
+        2
+    ) if mttd_values else 0
+ 
+    # -----------------------------
+    # SLA Compliance
+    # -----------------------------
+ 
+    sla_rules = {
+        "P1": 60,
+        "P2": 240,
+        "P3": 480,
+        "P4": 1440
+    }
+ 
+    sla_met = 0
+    sla_total = 0
+ 
+    for incident in incidents:
+ 
+        created = parse_dt(
+            incident.get("created_at")
+        )
+ 
+        resolved = parse_dt(
+            incident.get("resolved_at")
+        )
+ 
+        if not created or not resolved:
+            continue
+ 
+        sla_total += 1
+ 
+        resolution_minutes = (
+            resolved - created
+        ).total_seconds() / 60
+ 
+        allowed = sla_rules.get(
+            incident.get("priority"),
+            240
+        )
+ 
+        if resolution_minutes <= allowed:
+            sla_met += 1
+ 
+    sla = round(
+        sla_met / sla_total * 100,
+        2
+    ) if sla_total else 100
+ 
+    # -----------------------------
+    # Alert Resolution Time
+    # -----------------------------
+ 
+    alert_times = []
+ 
+    for alert in alerts:
+ 
+        created = parse_dt(
+            alert.get("created_at")
+        )
+ 
+        resolved = parse_dt(
+            alert.get("resolved_at")
+        )
+ 
+        if created and resolved:
+            alert_times.append(
+                (
+                    resolved -
+                    created
+                ).total_seconds() / 60
+            )
+ 
+    avg_alert_resolution = round(
+        sum(alert_times) / len(alert_times),
+        2
+    ) if alert_times else 0
+ 
+    # -----------------------------
+    # Dashboard
+    # -----------------------------
+ 
     return {
+ 
         "devices": {
+ 
             "total": len(devices),
+ 
             "online": online_devices,
-            "offline": len([d for d in devices if d.get("status") == "offline"]),
-            "degraded": len([d for d in devices if d.get("status") == "degraded"]),
-            "maintenance": len([d for d in devices if d.get("status") == "maintenance"])
+ 
+            "offline": len(
+                [d for d in devices if d.get("status") == "offline"]
+            ),
+ 
+            "degraded": len(
+                [d for d in devices if d.get("status") == "degraded"]
+            ),
+ 
+            "maintenance": len(
+                [d for d in devices if d.get("status") == "maintenance"]
+            )
+ 
         },
+ 
         "alerts": {
+ 
             "total": len(alerts),
+ 
             "active": len(active_alerts),
-            "critical": len([a for a in active_alerts if a.get("severity") == "critical"]),
-            "high": len([a for a in active_alerts if a.get("severity") == "high"]),
-            "medium": len([a for a in active_alerts if a.get("severity") == "medium"]),
-            "low": len([a for a in active_alerts if a.get("severity") == "low"])
+ 
+            "critical": len(
+                [a for a in active_alerts if a.get("severity") == "critical"]
+            ),
+ 
+            "high": len(
+                [a for a in active_alerts if a.get("severity") == "high"]
+            ),
+ 
+            "medium": len(
+                [a for a in active_alerts if a.get("severity") == "medium"]
+            ),
+ 
+            "low": len(
+                [a for a in active_alerts if a.get("severity") == "low"]
+            )
+ 
         },
+ 
         "incidents": {
+ 
             "total": len(incidents),
+ 
             "open": len(open_incidents),
-            "p1_open": len([i for i in open_incidents if i.get("priority") == "P1"]),
-            "p2_open": len([i for i in open_incidents if i.get("priority") == "P2"])
+ 
+            "resolved": len(
+                [i for i in incidents if i.get("status") == "resolved"]
+            ),
+ 
+            "p1_open": len(
+                [i for i in open_incidents if i.get("priority") == "P1"]
+            ),
+ 
+            "p2_open": len(
+                [i for i in open_incidents if i.get("priority") == "P2"]
+            )
+ 
         },
+ 
         "kpis": {
-            "uptime_percentage": uptime_pct,
-            "mttd_minutes": 5,
+ 
+            "availability_percentage": uptime_pct,
+ 
+            "mttd_minutes": mttd,
+ 
             "mttr_minutes": mttr,
-            "sla_compliance": 98.5,
-            "fcr_rate": 75.0
+ 
+            "sla_compliance": sla,
+ 
+            "average_alert_resolution_minutes": avg_alert_resolution
+ 
         }
+ 
     }
 
 @dashboard_router.get("/recent-alerts")
@@ -3365,39 +4522,6 @@ async def get_all_users(current_user: dict = Depends(get_current_user)):
     users = await db.users.find({}, {"_id": 0, "password_hash": 0}).to_list(1000)
     return users
 
-@users_router.post("")
-async def create_user(user_data: UserCreate, current_user: dict = Depends(get_current_user)):
-    """Create a new user (admin only)"""
-    if current_user.get("role") != "admin":
-        raise HTTPException(status_code=403, detail="Admin access required")
-    
-    # Check if email already exists
-    existing = await db.users.find_one({"email": user_data.email})
-    if existing:
-        raise HTTPException(status_code=400, detail="Email already registered")
-    
-    # Validate role
-    if user_data.role not in ["admin", "operator"]:
-        raise HTTPException(status_code=400, detail="Invalid role. Must be 'admin' or 'operator'")
-    
-    now = datetime.now(timezone.utc)
-    user_dict = {
-        "id": str(uuid.uuid4()),
-        "email": user_data.email,
-        "name": user_data.name,
-        "role": user_data.role,
-        "password_hash": hash_password(user_data.password),
-        "is_active": True,
-        "created_at": now.isoformat(),
-        "updated_at": now.isoformat()
-    }
-    
-    user_insert = user_dict.copy()
-    await db.users.insert_one(user_insert)
-    
-    # Return without password
-    del user_dict["password_hash"]
-    return user_dict
 
 @users_router.get("/{user_id}")
 async def get_user(user_id: str, current_user: dict = Depends(get_current_user)):
@@ -3658,132 +4782,6 @@ async def delete_o365_config(current_user: dict = Depends(get_current_user)):
     await db.o365_config.delete_many({})
     return {"success": True, "message": "O365 configuration deleted"}
 
-# ===================== SEED DATA =====================
-@api_router.post("/seed")
-async def seed_demo_data(current_user: dict = Depends(get_current_user)):
-    """Seed database with demo data"""
-    import random
-    
-    # Clear existing data
-    await db.devices.delete_many({})
-    await db.alerts.delete_many({})
-    await db.incidents.delete_many({})
-    await db.performance_metrics.delete_many({})
-    await db.assets.delete_many({})
-    
-    # Create demo devices
-    demo_devices = [
-        {"name": "Core-Router-01", "type": "router", "ip_address": "10.0.1.1", "location": "DC-East", "vendor": "Cisco", "model": "ASR 9000", "status": "online", "mac_address": "00:1A:2B:3C:4D:01", "hostname": "core-rtr-01.dc-east.atech.local", "os_version": "IOS-XR 7.5.2", "os_install_date": "2024-03-15", "warranty_status": "active", "warranty_expiry": "2027-03-15", "aaa_enabled": True},
-        {"name": "Core-Switch-01", "type": "switch", "ip_address": "10.0.1.2", "location": "DC-East", "vendor": "Cisco", "model": "Catalyst 9500", "status": "online", "mac_address": "00:1A:2B:3C:4D:02", "hostname": "core-sw-01.dc-east.atech.local", "os_version": "IOS-XE 17.6.3", "os_install_date": "2024-01-20", "warranty_status": "active", "warranty_expiry": "2026-12-31", "aaa_enabled": True},
-        {"name": "Firewall-01", "type": "firewall", "ip_address": "10.0.1.3", "location": "DC-East", "vendor": "Palo Alto", "model": "PA-5260", "status": "online", "mac_address": "00:1A:2B:3C:4D:03", "hostname": "fw-01.dc-east.atech.local", "os_version": "PAN-OS 11.0.2", "os_install_date": "2024-06-01", "warranty_status": "active", "warranty_expiry": "2028-06-01", "aaa_enabled": True},
-        {"name": "Load-Balancer-01", "type": "load_balancer", "ip_address": "10.0.1.4", "location": "DC-East", "vendor": "F5", "model": "BIG-IP i5800", "status": "online", "mac_address": "00:1A:2B:3C:4D:04", "hostname": "lb-01.dc-east.atech.local", "os_version": "TMOS 16.1.3", "os_install_date": "2023-09-15", "warranty_status": "active", "warranty_expiry": "2026-09-15", "aaa_enabled": False},
-        {"name": "Server-Web-01", "type": "server", "ip_address": "10.0.2.10", "location": "DC-East", "vendor": "Dell", "model": "PowerEdge R750", "status": "online", "mac_address": "00:1A:2B:3C:4D:10", "hostname": "web-srv-01.dc-east.atech.local", "os_version": "RHEL 8.8", "os_install_date": "2024-02-01", "warranty_status": "active", "warranty_expiry": "2027-02-01", "aaa_enabled": False},
-        {"name": "Server-Web-02", "type": "server", "ip_address": "10.0.2.11", "location": "DC-East", "vendor": "Dell", "model": "PowerEdge R750", "status": "degraded", "mac_address": "00:1A:2B:3C:4D:11", "hostname": "web-srv-02.dc-east.atech.local", "os_version": "RHEL 7.9", "os_install_date": "2022-06-15", "warranty_status": "expiring_soon", "warranty_expiry": "2025-06-15", "aaa_enabled": False},
-        {"name": "Server-DB-01", "type": "server", "ip_address": "10.0.3.10", "location": "DC-East", "vendor": "HP", "model": "ProLiant DL380", "status": "online", "mac_address": "00:1A:2B:3C:4D:20", "hostname": "db-srv-01.dc-east.atech.local", "os_version": "Oracle Linux 8.7", "os_install_date": "2023-11-01", "warranty_status": "active", "warranty_expiry": "2026-11-01", "aaa_enabled": True},
-        {"name": "AWS-Instance-01", "type": "cloud_instance", "ip_address": "172.31.1.10", "location": "AWS-us-east-1", "vendor": "AWS", "model": "c5.xlarge", "status": "online", "hostname": "aws-app-01.us-east-1.compute.internal", "os_version": "Amazon Linux 2023", "os_install_date": "2024-08-01", "warranty_status": "active", "aaa_enabled": False},
-        {"name": "Azure-VM-01", "type": "cloud_instance", "ip_address": "172.16.1.10", "location": "Azure-EastUS", "vendor": "Azure", "model": "Standard_D4s_v3", "status": "online", "hostname": "azure-vm-01.eastus.cloudapp.azure.com", "os_version": "Windows Server 2022", "os_install_date": "2024-04-15", "warranty_status": "active", "aaa_enabled": False},
-        {"name": "Edge-Router-NYC", "type": "router", "ip_address": "10.1.1.1", "location": "NYC-Office", "vendor": "Juniper", "model": "MX240", "status": "online", "mac_address": "00:1A:2B:3C:5D:01", "hostname": "edge-rtr-nyc.atech.local", "os_version": "Junos 21.4R3", "os_install_date": "2023-03-01", "warranty_status": "active", "warranty_expiry": "2026-03-01", "aaa_enabled": True},
-        {"name": "Edge-Switch-NYC", "type": "switch", "ip_address": "10.1.1.2", "location": "NYC-Office", "vendor": "Arista", "model": "7050X3", "status": "offline", "mac_address": "00:1A:2B:3C:5D:02", "hostname": "edge-sw-nyc.atech.local", "os_version": "EOS 4.28.1F", "os_install_date": "2022-01-15", "warranty_status": "expired", "warranty_expiry": "2024-01-15", "aaa_enabled": True},
-        {"name": "WiFi-AP-Floor1", "type": "access_point", "ip_address": "10.1.2.10", "location": "NYC-Office", "vendor": "Aruba", "model": "AP-535", "status": "online", "mac_address": "00:1A:2B:3C:5D:10", "hostname": "wifi-ap-f1.nyc.atech.local", "os_version": "ArubaOS 8.10.0.4", "os_install_date": "2024-05-01", "warranty_status": "active", "warranty_expiry": "2027-05-01", "aaa_enabled": True},
-    ]
-    
-    for d in demo_devices:
-        device = Device(
-            **d,
-            cpu_usage=random.uniform(20, 80),
-            memory_usage=random.uniform(30, 70),
-            uptime_hours=random.randint(100, 5000)
-        )
-        device_dict = device.model_dump()
-        device_dict["created_at"] = device_dict["created_at"].isoformat()
-        device_dict["last_seen"] = device_dict["last_seen"].isoformat()
-        await db.devices.insert_one(device_dict)
-    
-    # Get device list for alerts
-    devices = await db.devices.find({}, {"_id": 0}).to_list(20)
-    
-    # Create demo alerts
-    alert_templates = [
-        {"severity": "critical", "title": "High CPU Usage", "description": "CPU usage exceeded 90% threshold", "metric_name": "cpu_usage", "threshold": 90},
-        {"severity": "high", "title": "Memory Usage Warning", "description": "Memory usage at 85%", "metric_name": "memory_usage", "threshold": 85},
-        {"severity": "medium", "title": "Disk Space Low", "description": "Disk usage at 80%", "metric_name": "disk_usage", "threshold": 80},
-        {"severity": "critical", "title": "Device Unreachable", "description": "Device not responding to ping", "metric_name": "availability", "threshold": 0},
-        {"severity": "high", "title": "High Latency Detected", "description": "Network latency exceeded 100ms", "metric_name": "latency", "threshold": 100},
-        {"severity": "low", "title": "Interface Flapping", "description": "Network interface experiencing intermittent connectivity", "metric_name": "interface_status", "threshold": 0},
-    ]
-    
-    for i, template in enumerate(alert_templates[:4]):
-        device = devices[i % len(devices)]
-        alert = Alert(
-            device_id=device["id"],
-            device_name=device["name"],
-            severity=AlertSeverity(template["severity"]),
-            title=template["title"],
-            description=template["description"],
-            metric_name=template["metric_name"],
-            metric_value=random.uniform(template["threshold"], template["threshold"] + 15),
-            threshold=template["threshold"]
-        )
-        alert_dict = alert.model_dump()
-        alert_dict["created_at"] = alert_dict["created_at"].isoformat()
-        await db.alerts.insert_one(alert_dict)
-    
-    # Create demo incidents
-    incident_templates = [
-        {"title": "Network Outage - NYC Office", "description": "Complete network outage affecting NYC office. All users unable to connect.", "priority": "P1", "category": "Network"},
-        {"title": "Web Server Performance Degradation", "description": "Server-Web-02 showing high response times and increased error rates.", "priority": "P2", "category": "Server"},
-        {"title": "Firewall Policy Update Required", "description": "New application requires firewall rule changes.", "priority": "P3", "category": "Security"},
-        {"title": "Backup Job Failure", "description": "Nightly backup job for DB server failed.", "priority": "P2", "category": "Backup"},
-    ]
-    
-    for template in incident_templates:
-        incident = Incident(
-            title=template["title"],
-            description=template["description"],
-            priority=IncidentPriority(template["priority"]),
-            category=template["category"],
-            created_by=current_user["name"],
-            affected_devices=[devices[0]["id"]]
-        )
-        incident_dict = incident.model_dump()
-        incident_dict["created_at"] = incident_dict["created_at"].isoformat()
-        incident_dict["updated_at"] = incident_dict["updated_at"].isoformat()
-        await db.incidents.insert_one(incident_dict)
-    
-    # Create demo assets
-    demo_assets = [
-        {"name": "Core Router", "asset_tag": "NET-001", "type": "Network", "vendor": "Cisco", "model": "ASR 9000", "serial_number": "SN123456", "location": "DC-East", "owner": "Network Team", "warranty_expiry": "2025-12-31"},
-        {"name": "Primary Database Server", "asset_tag": "SRV-001", "type": "Server", "vendor": "Dell", "model": "PowerEdge R750", "serial_number": "SN789012", "location": "DC-East", "owner": "Infrastructure Team", "warranty_expiry": "2026-06-30"},
-        {"name": "Firewall Primary", "asset_tag": "SEC-001", "type": "Security", "vendor": "Palo Alto", "model": "PA-5260", "serial_number": "SN345678", "location": "DC-East", "owner": "Security Team", "eol_date": "2027-01-01"},
-    ]
-    
-    for a in demo_assets:
-        asset = Asset(**a)
-        asset_dict = asset.model_dump()
-        asset_dict["created_at"] = asset_dict["created_at"].isoformat()
-        await db.assets.insert_one(asset_dict)
-    
-    # Create demo performance metrics
-    for device in devices[:5]:
-        for i in range(24):
-            metric = PerformanceMetric(
-                device_id=device["id"],
-                device_name=device["name"],
-                timestamp=datetime.now(timezone.utc) - timedelta(hours=i),
-                cpu_usage=random.uniform(20, 80),
-                memory_usage=random.uniform(30, 70),
-                disk_usage=random.uniform(40, 75),
-                bandwidth_in=random.uniform(100, 900),
-                bandwidth_out=random.uniform(50, 500),
-                latency_ms=random.uniform(1, 50),
-                packet_loss=random.uniform(0, 2),
-                uptime_hours=random.randint(100, 5000)
-            )
-            metric_dict = metric.model_dump()
-            metric_dict["timestamp"] = metric_dict["timestamp"].isoformat()
-            await db.performance_metrics.insert_one(metric_dict)
-    
-    return {"message": "Demo data seeded successfully"}
 
 # ===================== WEBSOCKET ROUTES =====================
 @app.websocket("/ws/alerts")
@@ -3799,69 +4797,139 @@ async def websocket_alerts(websocket: WebSocket):
         ws_manager.disconnect(websocket)
 
 # ===================== TOPOLOGY ROUTES =====================
+# Modified on 23-07-2026 for topology correction
 @topology_router.get("/data")
 async def get_topology_data(current_user: dict = Depends(get_current_user)):
-    """Get network topology data for visualization"""
+    """Dynamically build the network topology map by reading real database connections, CDP/LLDP neighbors, and subnets."""
     devices = await db.devices.find({}, {"_id": 0}).to_list(1000)
     
     nodes = []
     links = []
-    
-    # Group devices by location and type
-    location_groups = {}
+    generated_pairs = set()
+
+    def add_link(src_id, tgt_id, link_type):
+        pair_key = tuple(sorted([src_id, tgt_id]))
+        if pair_key not in generated_pairs and src_id != tgt_id:
+            generated_pairs.add(pair_key)
+            links.append({"source": src_id, "target": tgt_id, "type": link_type})
+
+    # Create a fast lookup map for devices by name, hostname, and IP
+    device_lookup = {}
     for device in devices:
-        loc = device.get("location", "Unknown")
-        if loc not in location_groups:
-            location_groups[loc] = {"core": [], "edge": [], "servers": [], "cloud": []}
-        
-        device_type = device.get("type", "")
-        node = {
-            "id": device["id"],
-            "name": device["name"],
-            "type": device_type,
+        node_id = device["id"]
+        nodes.append({
+            "id": node_id,
+            "name": device.get("hostname") or device.get("name"),
+            "type": device.get("type", "server"),
             "status": device.get("status", "unknown"),
             "ip": device.get("ip_address", ""),
-            "location": loc,
-            "group": loc
-        }
-        nodes.append(node)
+            "location": device.get("location", "DC-East"),
+            "group": device.get("type", "server")
+        })
         
-        if device_type in ["router", "switch", "firewall", "load_balancer"]:
-            location_groups[loc]["core"].append(device["id"])
-        elif device_type in ["server", "virtual_machine"]:
-            location_groups[loc]["servers"].append(device["id"])
-        elif device_type == "cloud_instance":
-            location_groups[loc]["cloud"].append(device["id"])
-        else:
-            location_groups[loc]["edge"].append(device["id"])
-    
-    # Create links based on network hierarchy
-    for loc, groups in location_groups.items():
-        # Connect core devices to each other
-        core_devices = groups["core"]
-        for i, device_id in enumerate(core_devices):
-            if i > 0:
-                links.append({"source": core_devices[0], "target": device_id, "type": "core"})
+        device_lookup[node_id] = device
+        if device.get("hostname"):
+            device_lookup[device["hostname"].lower()] = device
+        if device.get("name"):
+            device_lookup[device["name"].lower()] = device
+        if device.get("ip_address"):
+            device_lookup[device["ip_address"]] = device
+
+    # Dynamically parse connections from device metadata
+    for device in devices:
+        src_id = device["id"]
+        neighbors = device.get("neighbors", []) or device.get("snmp_info", {}).get("neighbors", [])
         
-        # Connect servers to first core device
-        if core_devices:
-            for server_id in groups["servers"]:
-                links.append({"source": core_devices[0], "target": server_id, "type": "server"})
-            for cloud_id in groups["cloud"]:
-                links.append({"source": core_devices[0], "target": cloud_id, "type": "cloud"})
-            for edge_id in groups["edge"]:
-                links.append({"source": core_devices[0], "target": edge_id, "type": "edge"})
-    
-    # Connect different locations through their first core device
-    locations = list(location_groups.keys())
-    for i in range(len(locations) - 1):
-        loc1_core = location_groups[locations[i]]["core"]
-        loc2_core = location_groups[locations[i + 1]]["core"]
-        if loc1_core and loc2_core:
-            links.append({"source": loc1_core[0], "target": loc2_core[0], "type": "wan"})
-    
+        # 1. Read explicit discovered neighbor links (CDP/LLDP)
+        if neighbors:
+            for nbr in neighbors:
+                nbr_name = str(nbr.get("hostname") or nbr.get("name") or "").lower().strip()
+                nbr_ip = nbr.get("ip_address")
+                
+                target_dev = device_lookup.get(nbr_ip) or device_lookup.get(nbr_name)
+                if target_dev:
+                    link_type = "core" if device.get("type") in ["router", "switch", "firewall"] and target_dev.get("type") in ["router", "switch", "firewall"] else "edge"
+                    add_link(src_id, target_dev["id"], link_type)
+
+        # 2. Read routing table next-hops if no direct neighbor metadata exists
+        routing_table = device.get("routing_table", [])
+        if routing_table and not neighbors:
+            for route in routing_table:
+                next_hop = route.get("next_hop")
+                target_dev = device_lookup.get(next_hop)
+                if target_dev and target_dev["id"] != src_id:
+                    add_link(src_id, target_dev["id"], "core")
+
+    # 3. Dynamic Subnet Proximity Fallback (Ensures orphaned devices link to their local gateway switch)
+    for device in devices:
+        src_id = device["id"]
+        dev_ip = device.get("ip_address", "")
+        
+        # Check if this device already has any links
+        has_links = any(src_id in (l["source"], l["target"]) for l in links)
+        if not has_links and dev_ip:
+            subnet_prefix = ".".join(dev_ip.split(".")[:3])
+            
+            # Find a router or switch in the exact same subnet segment
+            local_gateway = next((d for d in devices if d["id"] != src_id and d.get("type") in ["router", "switch", "firewall"] and d.get("ip_address", "").startswith(subnet_prefix)), None)
+            
+            if local_gateway:
+                add_link(local_gateway["id"], src_id, "edge")
+            elif devices:
+                # Absolute dynamic root fallback to the first core device found in the system
+                root_dev = next((d for d in devices if d.get("type") in ["router", "switch"]), devices[0])
+                if root_dev["id"] != src_id:
+                    add_link(root_dev["id"], src_id, "edge")
+
     return {"nodes": nodes, "links": links}
 
+    # =================================================================
+    # PHASE 1: RESOLVE PHYSICAL LINKS VIA LIVE CONNECTED NEIGHBORS
+    # =================================================================
+    for rtr in core_routers:
+        neighbors_list = rtr.get("neighbors") or rtr.get("snmp_info", {}).get("neighbors", []) or []
+        
+        for nbr in neighbors_list:
+            nbr_ip = nbr.get("ip_address")
+            nbr_host = nbr.get("hostname")
+            
+            # FIXED: Added explicit matching checks against 'hostname' to catch true CDP mappings
+            target_node = next((
+                d for d in core_routers if 
+                (nbr_ip and d.get("ip_address") == nbr_ip) or 
+                (nbr_host and d.get("hostname") == nbr_host) or
+                (nbr_host and d.get("name") == nbr_host)
+            ), None)
+            
+            if target_node:
+                add_topology_link(rtr["id"], target_node["id"], "core")
+
+    # =================================================================
+    # PHASE 2: FALLBACK TO SEQUENCE LAYER ONLY IF ZERO LINKS DISCOVERED
+    # =================================================================
+    if not links and len(core_routers) > 1:
+        def ip_sort_key(dev):
+            try:
+                return [int(x) for x in dev.get("ip_address", "0.0.0.0").split(".")]
+            except:
+                return [0, 0, 0, 0]
+        sorted_backbone = sorted(core_routers, key=ip_sort_key)
+        for i in range(len(sorted_backbone) - 1):
+            add_topology_link(sorted_backbone[i]["id"], sorted_backbone[i+1]["id"], "core")
+
+    # =================================================================
+    # PHASE 3: EDGE NODES RELATIONSHIP SETUP
+    # =================================================================
+    for edge in edge_nodes:
+        edge_ip = edge.get("ip_address", "")
+        if edge_ip:
+            edge_parts = edge_ip.split(".")[:3]
+            nearest_router = next((r for r in core_routers if r.get("ip_address", "").split(".")[:3] == edge_parts), None)
+            target_router = nearest_router or (core_routers[0] if core_routers else None)
+            if target_router:
+                add_topology_link(target_router["id"], edge["id"], "edge")
+
+    return {"nodes": nodes, "links": links}
 # ===================== SSH ROUTES =====================
 class SSHConnectionRequest(BaseModel):
     device_id: str
@@ -4292,36 +5360,63 @@ async def get_escalation_levels():
 
 @escalation_router.post("/check")
 async def check_escalations(current_user: dict = Depends(get_current_user)):
-    """Check for incidents/alerts that need escalation"""
+    """Check for incidents that need escalation (e.g., > 15 mins) and send email alerts."""
     now = datetime.now(timezone.utc)
     escalations_needed = []
     
-    # Get open P1/P2 incidents
     incidents = await db.incidents.find({
-        "priority": {"$in": ["P1", "P2"]},
-        "status": {"$in": ["open", "in_progress"]}
+        "status": {"$in": ["open", "in_progress", "awaiting_approval"]}
     }, {"_id": 0}).to_list(100)
     
     for incident in incidents:
         created_at = datetime.fromisoformat(incident["created_at"].replace("Z", "+00:00"))
-        hours_open = (now - created_at).total_seconds() / 3600
+        minutes_open = (now - created_at).total_seconds() / 60
         
-        for level in ESCALATION_LEVELS:
-            if hours_open >= level["threshold_hours"] and incident["priority"] in level["priority_filter"]:
-                # Check if already escalated to this level
-                existing = await db.escalation_history.find_one({
-                    "incident_id": incident["id"],
-                    "level": level["level"]
-                })
-                
-                if not existing:
-                    escalations_needed.append({
-                        "incident": incident,
-                        "level": level,
-                        "hours_open": round(hours_open, 1)
-                    })
+        # 15 Minute Escalation Trigger
+        if minutes_open >= 15:
+            existing = await db.escalation_history.find_one({
+                "incident_id": incident["id"],
+                "level": 1
+            })
+            
+            if not existing:
+                await send_escalation_email(incident["id"], 1, current_user)
+                escalations_needed.append(incident["ticket_number"])
     
-    return {"escalations_needed": escalations_needed, "count": len(escalations_needed)}
+    return {"escalations_triggered": escalations_needed, "count": len(escalations_needed)}
+
+# @escalation_router.post("/check")
+# async def check_escalations(current_user: dict = Depends(get_current_user)):
+#     """Check for incidents/alerts that need escalation"""
+#     now = datetime.now(timezone.utc)
+#     escalations_needed = []
+    
+#     # Get open P1/P2 incidents
+#     incidents = await db.incidents.find({
+#         "priority": {"$in": ["P1", "P2"]},
+#         "status": {"$in": ["open", "in_progress"]}
+#     }, {"_id": 0}).to_list(100)
+    
+#     for incident in incidents:
+#         created_at = datetime.fromisoformat(incident["created_at"].replace("Z", "+00:00"))
+#         hours_open = (now - created_at).total_seconds() / 3600
+        
+#         for level in ESCALATION_LEVELS:
+#             if hours_open >= level["threshold_hours"] and incident["priority"] in level["priority_filter"]:
+#                 # Check if already escalated to this level
+#                 existing = await db.escalation_history.find_one({
+#                     "incident_id": incident["id"],
+#                     "level": level["level"]
+#                 })
+                
+#                 if not existing:
+#                     escalations_needed.append({
+#                         "incident": incident,
+#                         "level": level,
+#                         "hours_open": round(hours_open, 1)
+#                     })
+    
+#     return {"escalations_needed": escalations_needed, "count": len(escalations_needed)}
 
 @escalation_router.post("/send")
 async def send_escalation_email(incident_id: str, level: int, current_user: dict = Depends(get_current_user)):
@@ -4488,8 +5583,12 @@ async def test_email_config(test_email: str, current_user: dict = Depends(get_cu
             server.send_message(msg)
         
         return {"success": True, "message": f"Test email sent successfully to {test_email}"}
-    except smtplib.SMTPAuthenticationError:
-        raise HTTPException(status_code=400, detail="Authentication failed. Please check your username and password.")
+    except smtplib.SMTPAuthenticationError as e:
+        raise HTTPException(
+        status_code=400,
+        detail=f"SMTP Auth Error {e.smtp_code}: {e.smtp_error.decode(errors='ignore')}"
+        )
+        #raise HTTPException(status_code=400, detail="Authentication failed. Please check your username and password.")
     except smtplib.SMTPException as e:
         raise HTTPException(status_code=400, detail=f"SMTP error: {str(e)}")
     except Exception as e:
@@ -5212,8 +6311,9 @@ async def approve_discovery_request(
         "subnet": job.subnet
     }
 
+
 async def _run_discovery_job(job_id: str, communities: List[str]):
-    """Background task to run discovery"""
+    """Background task to run discovery and link results back to the Job ID safely"""
     job = discovery_jobs.get(job_id)
     if not job:
         return
@@ -5224,28 +6324,37 @@ async def _run_discovery_job(job_id: str, communities: List[str]):
         
         devices = await discovery_service.run_discovery(job, communities, update_progress)
         
-        # Store discovered devices
         now = datetime.now(timezone.utc).isoformat()
         for device in devices:
-            # Generate asset tag from IP and timestamp
             asset_tag = f"DISC-{device.ip_address.replace('.', '')}-{datetime.now().strftime('%Y%m%d%H%M%S')}"
             
-            # Determine device type mapping for monitoring
             device_type_map = {
-                "router": "router",
-                "switch": "switch",
-                "firewall": "firewall",
-                "server": "server",
-                "workstation": "server",
-                "printer": "other",
-                "ap": "access_point",
-                "access_point": "access_point",
-                "camera": "other",
-                "phone": "other",
-                "unknown": "other"
+                "router": "router", "switch": "switch", "firewall": "firewall",
+                "server": "server", "workstation": "server", "printer": "other",
+                "ap": "access_point", "access_point": "access_point", "unknown": "other"
             }
             mapped_type = device_type_map.get(device.device_type or "unknown", "other")
             
+            # Pull enriched parameters from snmp data if available safely
+            snmp = device.snmp_info or {}
+            logger.info(
+                f"""
+                device.vendor={device.vendor}
+                snmp.vendor={snmp.get('vendor')}
+                snmp.model={snmp.get('model')}
+                snmp={snmp}
+                """)
+            device_vendor = device.vendor or snmp.get("vendor", "Unknown")
+            device_model = snmp.get("model") or "Unknown"
+            device_serial = snmp.get("serial") or snmp.get("serial_number") or "N/A"
+            device_os = snmp.get("os_version", "Unknown OS")
+            device_fw = snmp.get("firmware") or snmp.get("firmware_version") or device_os
+
+            if str(device_vendor).lower() == "unknown" or not device_vendor:
+                device_vendor = "Generic"
+            else:
+                device_vendor = str(device_vendor).upper().strip()
+
             device_dict = {
                 "id": str(uuid.uuid4()),
                 "name": device.hostname or f"device-{device.ip_address.replace('.', '-')}",
@@ -5253,15 +6362,15 @@ async def _run_discovery_job(job_id: str, communities: List[str]):
                 "ip_address": device.ip_address,
                 "mac_address": device.mac_address,
                 "hostname": device.hostname or f"device-{device.ip_address.replace('.', '-')}",
-                "device_type": device.device_type or "unknown",
-                "vendor": device.vendor or "Unknown",
-                "model": device.snmp_info.get("model", "Unknown") if device.snmp_info else "Unknown",
-                "serial_number": device.snmp_info.get("serial", "") if device.snmp_info else "",
+                "device_type": mapped_type,
+                "vendor": device_vendor,
+                "model": device_model,
+                "serial_number": device_serial,
                 "location": "Auto-Discovered",
                 "discovery_method": device.discovery_method,
-                "snmp_info": device.snmp_info,
+                "snmp_info": snmp,
                 "open_ports": device.open_ports,
-                "status": "online",
+                "status": "online" if (device.open_ports or device.snmp_info) else "offline",
                 "discovered_at": device.discovered_at,
                 "auto_discovered": True,
                 "created_at": now,
@@ -5270,13 +6379,12 @@ async def _run_discovery_job(job_id: str, communities: List[str]):
                 "memory_usage": 0.0,
                 "uptime_hours": 0,
                 "tags": ["auto-discovered"],
-                # Enhanced fields from SNMP
-                "os_version": device.snmp_info.get("os_version", "") if device.snmp_info else "",
-                "firmware_version": device.snmp_info.get("firmware", "") if device.snmp_info else "",
-                "warranty_status": "unknown"
+                "os_version": device_os,
+                "firmware_version": device_fw,
+                "warranty_status": "unknown",
+                "discovery_job_id": job_id
             }
             
-            # Check if device already exists (by IP or MAC)
             existing = await db.devices.find_one({
                 "$or": [
                     {"ip_address": device.ip_address},
@@ -5287,66 +6395,123 @@ async def _run_discovery_job(job_id: str, communities: List[str]):
             device_id = None
             if existing:
                 device_id = existing.get("id")
-                # Update existing device
+                existing_asset = await db.assets.find_one({
+                    "device_id": device_id
+                })
+                logger.info(
+                    f"{device.ip_address}: existing device found, "
+                    f"asset exists = {existing_asset is not None}"
+                )
+                # FIX: Read parameters from local variables, NOT from device.model dataclass attribute
                 await db.devices.update_one(
                     {"_id": existing["_id"]},
                     {"$set": {
                         "status": "online",
                         "last_seen": now,
-                        "snmp_info": device.snmp_info,
+                        "snmp_info": snmp,
                         "open_ports": device.open_ports,
-                        "vendor": device.vendor or existing.get("vendor", "Unknown"),
-                        "model": (device.snmp_info.get("model") if device.snmp_info else None) or existing.get("model"),
-                        "os_version": (device.snmp_info.get("os_version") if device.snmp_info else None) or existing.get("os_version"),
+                        "vendor": device_vendor if device_vendor != "GENERIC" else existing.get("vendor", "Generic"),
+                        "model": device_model if device_model != "Unknown" else existing.get("model", "Unknown Unit"),
+                        "os_version": device_os if device_os != "Unknown OS" else existing.get("os_version"),
+                        "discovery_job_id": job_id
                     }}
                 )
-            else:
-                device_id = device_dict["id"]
-                # Insert new device to monitoring
-                device_insert = device_dict.copy()
-                await db.devices.insert_one(device_insert)
-                
-                # Also create an asset record for new devices
-                asset_dict = {
+                if existing_asset:
+                    await db.assets.update_one(
+                        {"_id": existing_asset["_id"]},
+                        {"$set": {
+                            "discovery_job_id": job_id,
+                            "vendor": device_vendor if device_vendor != "GENERIC" else existing.get("vendor", "Generic"),
+                            "model": device_model if device_model != "Unknown" else existing.get("model", "Unknown Unit")
+                        }}
+                    )
+                else:
+                    logger.info(f"Creating missing asset for {device.ip_address}")
+                    asset_dict = {
                     "id": str(uuid.uuid4()),
                     "name": device.hostname or f"device-{device.ip_address.replace('.', '-')}",
                     "asset_tag": asset_tag,
-                    "type": device.device_type or "network_device",
-                    "vendor": device.vendor or "Unknown",
-                    "model": device.snmp_info.get("model", "Unknown") if device.snmp_info else "Unknown",
-                    "serial_number": device.snmp_info.get("serial", "N/A") if device.snmp_info else "N/A",
+                    "type": mapped_type,
+                    "vendor": device_vendor,
+                    "model": device_model,
+                    "serial_number": device_serial,
                     "location": "Auto-Discovered",
                     "owner": "IT Department",
                     "status": "active",
                     "purchase_date": None,
                     "warranty_expiry": None,
+                    "warranty_status": "unknown",
                     "eol_date": None,
                     "contract_details": None,
                     "license_info": None,
                     "created_at": now,
-                    # Extended asset fields
                     "ip_address": device.ip_address,
                     "mac_address": device.mac_address,
-                    "device_id": device_id,  # Link to monitoring device
+                    "device_id": device_id,  
                     "discovery_method": device.discovery_method,
-                    "auto_discovered": True
-                }
-                asset_insert = asset_dict.copy()
-                await db.assets.insert_one(asset_insert)
-            
-            # Create audit log for auto-discovery
-            await create_audit_log(
-                action_type="device_create" if not existing else "device_update",
-                description=f"{'Created' if not existing else 'Updated'} device {device.ip_address} via network discovery",
-                resource_type="device",
-                resource_id=device_id,
-                resource_name=device.hostname or device.ip_address,
-                details={
+                    "auto_discovered": True,
+                    "discovery_job_id": job_id
+                    }
+                    logger.info(asset_dict)
+                    result = await db.assets.insert_one(asset_dict)
+                    logger.info(
+                        f"Created asset for {device.ip_address}, "
+                        f"inserted_id={result.inserted_id}"
+                    )
+            else:
+                device_id = device_dict["id"]
+                await db.devices.insert_one(device_dict.copy())
+                
+                asset_dict = {
+                    "id": str(uuid.uuid4()),
+                    "name": device.hostname or f"device-{device.ip_address.replace('.', '-')}",
+                    "asset_tag": asset_tag,
+                    "type": mapped_type,
+                    "vendor": device_vendor,
+                    "model": device_model,
+                    "serial_number": device_serial,
+                    "location": "Auto-Discovered",
+                    "owner": "IT Department",
+                    "status": "active",
+                    "purchase_date": None,
+                    "warranty_expiry": None,
+                    "warranty_status": "unknown",
+                    "eol_date": None,
+                    "contract_details": None,
+                    "license_info": None,
+                    "created_at": now,
+                    "ip_address": device.ip_address,
+                    "mac_address": device.mac_address,
+                    "device_id": device_id,  
                     "discovery_method": device.discovery_method,
-                    "vendor": device.vendor,
-                    "auto_discovered": True
+                    "auto_discovered": True,
+                    "discovery_job_id": job_id
                 }
-            )
+                try:
+                    logger.info(f"Inserting asset for {device.ip_address}")
+                    logger.info(asset_dict)
+                    await db.assets.insert_one(asset_dict.copy())
+                    logger.info(f"Asset inserted for {device.ip_address}")
+                except Exception:
+                    logger.exception(f"Failed inserting asset for {device.ip_address}")
+                
+            if "create_audit_log" in globals() or "create_audit_log" in locals():
+                try:
+                    await create_audit_log(
+                        action_type="device_create" if not existing else "device_update",
+                        description=f"{'Created' if not existing else 'Updated'} device {device.ip_address} via network discovery",
+                        resource_type="device",
+                        resource_id=device_id,
+                        resource_name=device.hostname or device.ip_address,
+                        details={
+                            "discovery_method": device.discovery_method,
+                            "vendor": device_vendor,
+                            "auto_discovered": True,
+                            "discovery_job_id": job_id
+                        }
+                    )
+                except Exception as audit_err:
+                    print(f"Audit logging skipped: {audit_err}")
         
         job.status = "completed"
         job.completed_at = datetime.now(timezone.utc).isoformat()
@@ -5354,6 +6519,7 @@ async def _run_discovery_job(job_id: str, communities: List[str]):
         job.progress = 100
         
     except Exception as e:
+        logger.error(f"Global breakdown context in background discovery worker: {str(e)}")
         job.status = "failed"
         job.error = str(e)
         job.completed_at = datetime.now(timezone.utc).isoformat()
@@ -5658,159 +6824,107 @@ async def get_polling_status(current_user: dict = Depends(get_current_user)):
 api_router.include_router(network_router)
 
 # ===================== AI INCIDENT RESOLUTION =====================
-@ai_router.post("/incidents/{incident_id}/analyze")
-async def ai_analyze_incident(incident_id: str, current_user: dict = Depends(get_current_user)):
-    """AI analyzes incident and suggests resolution"""
-    incident = await db.incidents.find_one({"id": incident_id}, {"_id": 0})
-    if not incident:
-        raise HTTPException(status_code=404, detail="Incident not found")
+# ===================== NEW AI INCIDENT RESOLUTION & STAGING =====================
+# Modified : 21/07/2026 - Injection for AI Approval, Line : 7923 - 7533
+class AutonomousStageRequest(BaseModel):
+    incident_id: str
+    triggered_by: str = "ai_agent"
     
-    # Get related device and alerts
-    device = None
-    if incident.get("device_id"):
-        device = await db.devices.find_one({"id": incident["device_id"]}, {"_id": 0})
-    
-    alerts = await db.alerts.find({"incident_id": incident_id}, {"_id": 0}).to_list(100)
-    
-    # Build context for AI analysis
-    context = f"""
-    Incident: {incident.get('title', 'Unknown')}
-    Description: {incident.get('description', 'No description')}
-    Priority: {incident.get('priority', 'Unknown')}
-    Status: {incident.get('status', 'Unknown')}
-    Device: {device.get('name', 'Unknown') if device else 'No device'}
-    Device Type: {device.get('type', 'Unknown') if device else 'N/A'}
-    Device Status: {device.get('status', 'Unknown') if device else 'N/A'}
-    Related Alerts: {len(alerts)}
-    """
-    
-    # Get AI analysis
-    analysis = await get_ai_analysis(context, "Analyze this incident and provide: 1) Root cause analysis, 2) Recommended actions, 3) Whether this can be auto-resolved or requires user confirmation")
-    
-    # Determine action type based on analysis
-    action_type = "auto_resolve"
-    requires_confirmation = False
-    
-    analysis_lower = analysis.lower()
-    if "reboot" in analysis_lower or "restart" in analysis_lower:
-        action_type = "reboot_required"
-        requires_confirmation = True
-    elif "disconnect" in analysis_lower or "link" in analysis_lower:
-        action_type = "link_reset"
-        requires_confirmation = True
-    elif "hardware" in analysis_lower and ("failure" in analysis_lower or "fault" in analysis_lower):
-        action_type = "hardware_failure"
-        requires_confirmation = False  # SOS sent automatically
-    
-    # Create incident action record
-    action = IncidentAction(
-        incident_id=incident_id,
-        action_type=action_type,
-        description=analysis,
-        requires_confirmation=requires_confirmation,
-        confirmation_status="pending" if requires_confirmation else None
-    )
-    
-    action_dict = action.model_dump()
-    action_dict["created_at"] = action_dict["created_at"].isoformat()
-    await db.incident_actions.insert_one(dict(action_dict))
-    
-    # If hardware failure, send SOS to all escalation contacts
-    sos_sent = False
-    if action_type == "hardware_failure":
-        escalation_contacts = await db.escalation_contacts.find({}, {"_id": 0}).to_list(100)
-        if escalation_contacts:
-            # Get email config
-            email_config = await db.email_config.find_one({}, {"_id": 0})
-            if email_config:
-                try:
-                    msg = MIMEMultipart()
-                    msg['From'] = f"{email_config.get('sender_name', 'NOC')} <{email_config['sender_email']}>"
-                    msg['To'] = ', '.join([c["email"] for c in escalation_contacts])
-                    msg['Subject'] = f"🚨 SOS: HARDWARE FAILURE - {incident.get('title', 'Critical Alert')}"
-                    
-                    body = f"""
-                    <html>
-                    <body style="font-family: Arial, sans-serif;">
-                        <h2 style="color: #dc2626;">🚨 HARDWARE FAILURE DETECTED</h2>
-                        <h3>{incident.get('title', 'Critical Incident')}</h3>
-                        <p><strong>Device:</strong> {device.get('name', 'Unknown') if device else 'Unknown'}</p>
-                        <p><strong>Description:</strong> {incident.get('description', 'No description')}</p>
-                        <hr>
-                        <h4>AI Analysis:</h4>
-                        <p>{analysis}</p>
-                        <hr>
-                        <p style="color: #dc2626;"><strong>IMMEDIATE ATTENTION REQUIRED</strong></p>
-                        <p>This is an automated SOS alert from ATECH NOC Commander.</p>
-                    </body>
-                    </html>
-                    """
-                    msg.attach(MIMEText(body, 'html'))
-                    
-                    with smtplib.SMTP(email_config['smtp_server'], email_config['smtp_port']) as server:
-                        if email_config.get('use_tls', True):
-                            server.starttls()
-                        server.login(email_config['username'], email_config['password'])
-                        server.send_message(msg)
-                    sos_sent = True
-                except Exception as e:
-                    logger.error(f"Failed to send SOS email: {e}")
-    
-    return {
-        "analysis": analysis,
-        "action_type": action_type,
-        "requires_confirmation": requires_confirmation,
-        "action_id": action.id,
-        "sos_sent": sos_sent
-    }
 
-@ai_router.post("/incidents/actions/{action_id}/confirm")
-async def confirm_incident_action(action_id: str, approved: bool, current_user: dict = Depends(get_current_user)):
-    """Confirm or reject an AI-suggested incident action"""
-    action = await db.incident_actions.find_one({"id": action_id}, {"_id": 0})
-    if not action:
-        raise HTTPException(status_code=404, detail="Action not found")
+
+# =====================================================================
+# STAGE 2: EXECUTION APPROVAL GATEWAY
+# =====================================================================
+
+class AutonomousApprovalRequest(BaseModel):
+    incident_id: str
+    approved: bool
+@ai_router.post("/autonomous/stage-remedy")
+async def stage_autonomous_remedy(
+    request: AutonomousStageRequest,
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Uses the LLM to stage proposed CLI commands and locks status to 'awaiting_approval'.
+    Legacy playbook dependencies removed.
+    """
+    incident = await db.incidents.find_one({"id": request.incident_id})
+    if not incident:
+        raise HTTPException(status_code=404, detail="Incident context missing.")
+        
+    device_id = incident.get("device_id") or (incident.get("affected_devices")[0] if incident.get("affected_devices") else None)
+    device = await db.devices.find_one({"id": device_id})
+
+    driver_key = device.get("vendor", "generic").lower()
+    source = "emergent_llm"
+
+    prompt_context = f"Device Vendor: {driver_key}\nTelemetry: {json.dumps(incident.get('telemetry', {}), default=str)}"
+    prompt_query = "Analyze the incident details and output the explicit raw vendor CLI commands required to fix this issue as a clean text string. Output only the commands."
     
-    status = "approved" if approved else "rejected"
-    await db.incident_actions.update_one(
-        {"id": action_id},
+    proposed_commands = await get_ai_analysis(prompt_context, prompt_query)
+
+    await db.incidents.update_one(
+        {"id": request.incident_id},
         {"$set": {
-            "confirmation_status": status,
-            "confirmed_by": current_user["name"]
+            "status": "awaiting_approval",
+            "proposed_remediation_source": source,
+            "proposed_commands": proposed_commands
         }}
     )
-    
-    result = {"message": f"Action {status}", "executed": False}
-    
-    # If approved, execute the action (simulated)
-    if approved:
-        await db.incident_actions.update_one(
-            {"id": action_id},
-            {"$set": {
-                "executed": True,
-                "executed_at": datetime.now(timezone.utc).isoformat(),
-                "result": "Action executed successfully"
-            }}
-        )
-        
-        # Update incident status
-        await db.incidents.update_one(
-            {"id": action.get("incident_id")},
-            {"$set": {"status": "in_progress", "ai_action_taken": True}}
-        )
-        result["executed"] = True
-        result["message"] = "Action approved and executed"
-    
-    return result
 
-@ai_router.get("/incidents/actions/pending")
-async def get_ai_pending_actions(current_user: dict = Depends(get_current_user)):
-    """Get all pending actions requiring user confirmation"""
-    actions = await db.incident_actions.find(
-        {"requires_confirmation": True, "confirmation_status": "pending"},
+    return {
+        "success": True,
+        "status": "awaiting_approval",
+        "source": source,
+        "proposed_commands": proposed_commands
+    }
+
+@ai_router.post("/autonomous/execute-approval")
+async def execute_approval_remedy(
+    request: AutonomousApprovalRequest,
+    current_user: dict = Depends(get_current_user)
+):
+    """Executes human-approved CLI commands on the target hardware."""
+    incident = await db.incidents.find_one({"id": request.incident_id})
+    if not incident or incident.get("status") != "awaiting_approval":
+        raise HTTPException(status_code=400, detail="Incident is not staged for approval.")
+
+    if not request.approved:
+        await db.incidents.update_one(
+            {"id": request.incident_id},
+            {"$set": {"status": "in_progress", "proposed_commands": None}}
+        )
+        return {"success": True, "message": "Remediation rejected."}
+
+    commands_to_run = incident.get("proposed_commands")
+    device = await db.devices.find_one({"id": incident.get("device_id")})
+
+    agent_service = AutonomousAgentService()
+    ssh_client, _ = await agent_service.connect_ssh(device)
+    
+    if ssh_client:
+        execution_result = await agent_service.execute_command(ssh_client, commands_to_run)
+        ssh_client.close()
+        
+        if execution_result.get("success"):
+            await db.incidents.update_one(
+                {"id": request.incident_id},
+                {"$set": {"status": "resolved", "resolved_at": datetime.now(timezone.utc).isoformat()}}
+            )
+        return {"success": True, "execution_output": execution_result}
+
+    return {"success": False, "error": "Failed to establish SSH connection for execution."}
+
+
+@agent_exec_router.get("/staged-incidents")
+async def get_staged_actions(current_user: dict = Depends(get_current_user)):
+    """Get all incidents currently awaiting approval."""
+    incidents = await db.incidents.find(
+        {"status": "awaiting_approval"}, 
         {"_id": 0}
-    ).to_list(100)
-    return actions
+    ).sort("updated_at", -1).to_list(100)
+    return incidents
+
 
 # Include all routers
 api_router.include_router(auth_router)
@@ -6789,12 +7903,6 @@ async def aaa_authenticate(
     
     return result
 
-# Include new routers
-api_router.include_router(audit_router)
-api_router.include_router(backup_router)
-api_router.include_router(aaa_router)
-
-app.include_router(api_router)
 
 app.add_middleware(
     CORSMiddleware,
@@ -6803,6 +7911,17 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+import upgrade_manager
+from cmdb_router import cmdb_router
+api_router.include_router(audit_router)
+api_router.include_router(backup_router)
+api_router.include_router(aaa_router)
+api_router.include_router(cmdb_router)
+
+app.include_router(api_router)
+app.include_router(upgrade_manager.router, tags=["Firmware Upgrade"])
+
 
 @app.on_event("shutdown")
 async def shutdown_db_client():

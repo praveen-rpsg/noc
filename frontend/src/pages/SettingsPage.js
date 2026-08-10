@@ -229,6 +229,8 @@ function ConnectionSettings() {
 }
 
 export default function SettingsPage() {
+  const API = getApiUrl();
+
   const [activeTab, setActiveTab] = useState('connection');
   
   // Email Configuration State (SMTP)

@@ -27,6 +27,8 @@ import SettingsPage from "./pages/SettingsPage";
 import NetworkDiscoveryPage from "./pages/NetworkDiscoveryPage";
 import AuditLogsPage from "./pages/AuditLogsPage";
 import ConfigBackupPage from "./pages/ConfigBackupPage";
+import FirmwareUpgrade from './pages/FirmwareUpgrade';
+import CMDBPage from "./pages/CMDBPage";
 
 const ProtectedRoute = ({ children }) => {
   const { user, loading } = useAuth();
@@ -138,6 +140,14 @@ function AppRoutes() {
             <SSHTerminalPage />
           </ProtectedRoute>
         }
+        />
+      <Route
+        path="/firmware-upgrade"
+        element={
+          <ProtectedRoute>
+            <FirmwareUpgrade />
+          </ProtectedRoute>
+        }
       />
       <Route
         path="/reports"
@@ -216,6 +226,14 @@ function AppRoutes() {
         element={
           <ProtectedRoute>
             <AuditLogsPage />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/cmdb"
+        element={
+          <ProtectedRoute>
+            <CMDBPage />
           </ProtectedRoute>
         }
       />

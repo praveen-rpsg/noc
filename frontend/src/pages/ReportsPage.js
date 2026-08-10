@@ -23,8 +23,9 @@ import {
   Eye
 } from 'lucide-react';
 import { format, subDays } from 'date-fns';
+import { getApiUrl } from '../services/config';
 
-const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
+const API = getApiUrl();
 
 export default function ReportsPage() {
   const [reports, setReports] = useState([]);
@@ -70,7 +71,7 @@ export default function ReportsPage() {
     setDownloadingId(reportId);
     try {
       const token = getToken();
-      const response = await fetch(`${BACKEND_URL}/api/reports/${reportId}/download/pdf`, {
+      const response = await fetch(`${API}/reports/${reportId}/download/pdf`, {
         headers: { Authorization: `Bearer ${token}` }
       });
       
@@ -97,7 +98,7 @@ export default function ReportsPage() {
     setDownloadingId(reportId);
     try {
       const token = getToken();
-      const response = await fetch(`${BACKEND_URL}/api/reports/${reportId}/download/csv`, {
+      const response = await fetch(`${API}/reports/${reportId}/download/csv`, {
         headers: { Authorization: `Bearer ${token}` }
       });
       

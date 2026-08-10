@@ -1,0 +1,104 @@
+# ATECH NOC Commander - Docker Compose for Network Discovery
+# Use this configuration when you need to discover devices on your local network
+#
+# This uses 'host' network mode for the backend to allow:
+# - SNMP polling (UDP 161)
+# - SSH connections (TCP 22)
+# - Ping/ICMP for discovery
+# - Direct access to LAN devices
+#
+# Usage:
+#   docker-compose -f docker-compose.discovery.yml up -d
+
+version: '3.8'
+
+services:
+  # MongoDB Database
+  mongodb:
+    image: mongo:7.0
+    container_name: atech-noc-mongodb
+    restart: unless-stopped
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_ROOT_USERNAME:-admin}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD:-adminpassword}
+      MONGO_INITDB_DATABASE: atech_noc
+    volumes:
+      - mongodb_data:/data/db
+      - ./docker/mongo-init.js:/docker-entrypoint-initdb.d/mongo-init.js:ro
+    ports:
+      - "27017:27017"
+    networks:
+      - atech-network
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  # Backend API Server with Host Network (for network discovery)
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: atech-noc-backend
+    restart: unless-stopped
+    # HOST NETWORK MODE - Required for network discovery
+    # This gives the container direct access to the host's network interfaces
+    network_mode: host
+    environment:
+      # MongoDB connection uses localhost since we're in host network mode
+      - MONGO_URL=mongodb://${MONGO_ROOT_USERNAME:-admin}:${MONGO_ROOT_PASSWORD:-adminpassword}@localhost:27017
+      - DB_NAME=${DB_NAME:-atech_noc}
+      - JWT_SECRET_KEY=${JWT_SECRET_KEY:-your-super-secret-key-change-in-production}
+      - JWT_ALGORITHM=HS256
+      - JWT_ACCESS_TOKEN_EXPIRE_MINUTES=1440
+      - HOST=0.0.0.0
+      - PORT=8001
+      - EMERGENT_LLM_KEY=${EMERGENT_LLM_KEY:-}
+    depends_on:
+      mongodb:
+        condition: service_healthy
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    # Add Linux capabilities for raw socket operations (ping, ARP)
+    cap_add:
+      - NET_RAW
+      - NET_ADMIN
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  # Frontend Web Server
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        # Backend is on host network, accessible via localhost
+        - REACT_APP_BACKEND_URL=http://localhost:8001
+    container_name: atech-noc-frontend
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    depends_on:
+      - mongodb
+    networks:
+      - atech-network
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+networks:
+  atech-network:
+    driver: bridge
+
+volumes:
+  mongodb_data:
+    driver: local

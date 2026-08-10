@@ -18,12 +18,12 @@ def generate_activation_code() -> str:
         parts.append(part)
     return f"ATECH-{'-'.join(parts)}"
 
-def generate_activation_codes(count: int = 200) -> List[dict]:
+def generate_activation_codes(count: int = 1) -> List[dict]:
     """Generate multiple unique activation codes"""
     codes = []
     generated = set()
     
-    while len(codes) < count:
+    while len(codes) < 1:
         code = generate_activation_code()
         if code not in generated:
             generated.add(code)

@@ -10,6 +10,7 @@ import { toast } from 'sonner';
 import axios from 'axios';
 import {
   Network,
+  Switch,
   RefreshCw,
   Server,
   ZoomIn,
@@ -22,9 +23,10 @@ import {
   Route,
   X
 } from 'lucide-react';
+import { getApiUrl } from '../services/config';
+import { getAuthHeader } from '../services/auth';
 
-const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
-const API = `${BACKEND_URL}/api`;
+const API = getApiUrl();
 
 const StatusBadge = ({ status }) => {
   const styles = {
@@ -156,7 +158,7 @@ export default function TopologyPage() {
 
   const fetchTopology = async () => {
     try {
-      const response = await axios.get(`${API}/topology/data`);
+      const response = await axios.get(`${API}/topology/data`, { headers: getAuthHeader() });
       setTopology(response.data);
       
       // Load saved device URLs from localStorage
@@ -201,63 +203,92 @@ export default function TopologyPage() {
           return;
         }
       } catch (e) {
-        // Invalid JSON in localStorage, will regenerate positions
         console.debug('Regenerating topology positions:', e.message);
       }
     }
     
-    // Calculate hierarchical layout
-    const typeGroups = {};
+    // ==========================================================
+    // FIXED: Build a structural graph layout based on connection links
+    // ==========================================================
+    const adjacencyList = {};
     topology.nodes.forEach(node => {
-      const type = node.type || 'unknown';
-      if (!typeGroups[type]) typeGroups[type] = [];
-      typeGroups[type].push(node);
+      adjacencyList[node.id] = [];
+    });
+    
+    topology.links.forEach(link => {
+      if (adjacencyList[link.source]) adjacencyList[link.source].push(link.target);
+      if (adjacencyList[link.target]) adjacencyList[link.target].push(link.source);
     });
 
+    // 1. Find the central hub node (highest connection degree)
+    let hubNodeId = null;
+    let maxConnections = -1;
+    topology.nodes.forEach(node => {
+      const connectionCount = adjacencyList[node.id]?.length || 0;
+      if (connectionCount > maxConnections) {
+        maxConnections = connectionCount;
+        hubNodeId = node.id;
+      }
+    });
+
+    if (!hubNodeId && topology.nodes.length > 0) {
+      hubNodeId = topology.nodes[0].id;
+    }
+
+    // 2. Map nodes to architectural tree levels using Breadth-First Search (BFS)
+    const levels = {};
+    const visited = new Set();
+    const queue = [[hubNodeId, 0]]; // [nodeId, levelDepth]
+    visited.add(hubNodeId);
+
+    while (queue.length > 0) {
+      const [currentId, depth] = queue.shift();
+      if (!levels[depth]) levels[depth] = [];
+      levels[depth].push(currentId);
+
+      (adjacencyList[currentId] || []).forEach(neighborId => {
+        if (!visited.has(neighborId)) {
+          visited.add(neighborId);
+          queue.push([neighborId, depth + 1]);
+        }
+      });
+    }
+
+    // Capture any standalone orphan nodes without links
+    topology.nodes.forEach(node => {
+      if (!visited.has(node.id)) {
+        if (!levels[0]) levels[0] = [];
+        levels[0].push(node.id);
+      }
+    });
+
+    // 3. Compute screen coordinates based on structural level depth
     const newPositions = {};
     const margin = 100;
     const usableWidth = width - margin * 2;
     const usableHeight = height - margin * 2;
-    
-    // Core layer: routers, firewalls
-    const coreDevices = [...(typeGroups['router'] || []), ...(typeGroups['firewall'] || [])];
-    // Distribution layer: switches, load balancers
-    const distDevices = [...(typeGroups['switch'] || []), ...(typeGroups['load_balancer'] || [])];
-    // Access layer: servers, VMs, cloud, APs
-    const accessDevices = [
-      ...(typeGroups['server'] || []),
-      ...(typeGroups['virtual_machine'] || []),
-      ...(typeGroups['cloud_instance'] || []),
-      ...(typeGroups['access_point'] || [])
-    ];
-    
-    // Top row - Core (y = 15%)
-    if (coreDevices.length > 0) {
-      const spacing = usableWidth / (coreDevices.length + 1);
-      coreDevices.forEach((node, i) => {
-        newPositions[node.id] = { x: margin + spacing * (i + 1), y: margin + usableHeight * 0.15 };
+    const totalLevels = Object.keys(levels).length;
+
+    Object.keys(levels).forEach(levelStr => {
+      const depth = parseInt(levelStr);
+      const levelNodeIds = levels[depth];
+      
+      // Vertical distribution based on calculated hierarchical level
+      const y = margin + usableHeight * (depth / (totalLevels > 1 ? totalLevels - 1 : 1));
+      
+      // Horizontal spacing distributed evenly across the specific row width
+      const spacing = usableWidth / (levelNodeIds.length + 1);
+      levelNodeIds.forEach((id, index) => {
+        newPositions[id] = {
+          x: margin + spacing * (index + 1),
+          y: y
+        };
       });
-    }
-    
-    // Middle row - Distribution (y = 50%)
-    if (distDevices.length > 0) {
-      const spacing = usableWidth / (distDevices.length + 1);
-      distDevices.forEach((node, i) => {
-        newPositions[node.id] = { x: margin + spacing * (i + 1), y: margin + usableHeight * 0.50 };
-      });
-    }
-    
-    // Bottom row - Access (y = 85%)
-    if (accessDevices.length > 0) {
-      const spacing = usableWidth / (accessDevices.length + 1);
-      accessDevices.forEach((node, i) => {
-        newPositions[node.id] = { x: margin + spacing * (i + 1), y: margin + usableHeight * 0.85 };
-      });
-    }
+    });
 
     setNodePositions(newPositions);
     localStorage.setItem('topologyPositions', JSON.stringify(newPositions));
-  }, [topology.nodes, nodePositions]);
+  }, [topology.nodes, topology.links, nodePositions]);
 
   // Draw 3D colorful node
   const draw3DNode = useCallback((ctx, x, y, node, isSelected, size) => {
@@ -547,12 +578,27 @@ export default function TopologyPage() {
   }, [drawTopology]);
 
   // Mouse event handlers
+  // const getCanvasCoords = useCallback((e) => {
+  //   const canvas = canvasRef.current;
+  //   const rect = canvas.getBoundingClientRect();
+  //   return {
+  //     x: (e.clientX - rect.left - pan.x) / zoom,
+  //     y: (e.clientY - rect.top - pan.y) / zoom
+  //   };
+  // }, [zoom, pan]);
   const getCanvasCoords = useCallback((e) => {
     const canvas = canvasRef.current;
+    if (!canvas) return { x: 0, y: 0 };
+    
     const rect = canvas.getBoundingClientRect();
+    
+    // Calculate the accurate scale multiplier between internal canvas space and the on-screen display width/height
+    const scaleX = canvas.width / rect.width;
+    const scaleY = canvas.height / rect.height;
+    
     return {
-      x: (e.clientX - rect.left - pan.x) / zoom,
-      y: (e.clientY - rect.top - pan.y) / zoom
+      x: ((e.clientX - rect.left) * scaleX - pan.x) / zoom,
+      y: ((e.clientY - rect.top) * scaleY - pan.y) / zoom
     };
   }, [zoom, pan]);
 
@@ -656,24 +702,24 @@ export default function TopologyPage() {
   }, [drawTopology]);
 
   // Attach event listeners
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
+  // useEffect(() => {
+  //   const canvas = canvasRef.current;
+  //   if (!canvas) return;
 
-    canvas.addEventListener('mousedown', handleMouseDown);
-    canvas.addEventListener('mousemove', handleMouseMove);
-    canvas.addEventListener('mouseup', handleMouseUp);
-    canvas.addEventListener('mouseleave', handleMouseUp);
-    canvas.addEventListener('dblclick', handleDoubleClick);
+  //   canvas.addEventListener('mousedown', handleMouseDown);
+  //   canvas.addEventListener('mousemove', handleMouseMove);
+  //   canvas.addEventListener('mouseup', handleMouseUp);
+  //   canvas.addEventListener('mouseleave', handleMouseUp);
+  //   canvas.addEventListener('dblclick', handleDoubleClick);
 
-    return () => {
-      canvas.removeEventListener('mousedown', handleMouseDown);
-      canvas.removeEventListener('mousemove', handleMouseMove);
-      canvas.removeEventListener('mouseup', handleMouseUp);
-      canvas.removeEventListener('mouseleave', handleMouseUp);
-      canvas.removeEventListener('dblclick', handleDoubleClick);
-    };
-  }, [handleMouseDown, handleMouseMove, handleMouseUp, handleDoubleClick]);
+  //   return () => {
+  //     canvas.removeEventListener('mousedown', handleMouseDown);
+  //     canvas.removeEventListener('mousemove', handleMouseMove);
+  //     canvas.removeEventListener('mouseup', handleMouseUp);
+  //     canvas.removeEventListener('mouseleave', handleMouseUp);
+  //     canvas.removeEventListener('dblclick', handleDoubleClick);
+  //   };
+  // }, [handleMouseDown, handleMouseMove, handleMouseUp, handleDoubleClick]);
 
   const handleZoomIn = () => setZoom(z => Math.min(z + 0.2, 2));
   const handleZoomOut = () => setZoom(z => Math.max(z - 0.2, 0.5));
@@ -854,6 +900,15 @@ export default function TopologyPage() {
                   height={600}
                   className="w-full"
                   style={{ height: '600px', cursor: isDragging ? 'grabbing' : 'default' }}
+                  
+                  // ==========================================
+                  // CRITICAL FIX: Direct Native React Bindings
+                  // ==========================================
+                  onMouseDown={handleMouseDown}
+                  onMouseMove={handleMouseMove}
+                  onMouseUp={handleMouseUp}
+                  onMouseLeave={handleMouseUp}
+                  onDoubleClick={handleDoubleClick}
                 />
               </div>
             )}

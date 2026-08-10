@@ -65,7 +65,7 @@ export default function PendingActionsNotification() {
   useEffect(() => {
     fetchPendingActions();
     // Poll every 10 seconds
-    const interval = setInterval(fetchPendingActions, 10000);
+    const interval = setInterval(fetchPendingActions, 60000);
     return () => clearInterval(interval);
   }, [fetchPendingActions]);
 

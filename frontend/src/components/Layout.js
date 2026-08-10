@@ -6,6 +6,7 @@ import { ScrollArea } from '../components/ui/scroll-area';
 import { Badge } from '../components/ui/badge';
 import PendingActionsNotification from './PendingActionsNotification';
 import { VoiceAlertControls } from './VoiceAlertService';
+import { Link } from 'react-router-dom';
 import { 
   LayoutDashboard, 
   Monitor, 
@@ -29,7 +30,9 @@ import {
   LayoutGrid,
   Users,
   Database,
-  Shield
+  Shield,
+  UploadCloud,
+  Server,
 } from 'lucide-react';
 
 const AMEYA_LOGO_URL = "https://customer-assets.emergentagent.com/job_network-ops-ai/artifacts/vjap12f5_Atechlogo.jpeg";
@@ -41,6 +44,7 @@ const navItems = [
   { path: '/topology', label: 'Network Topology', icon: Network },
   { path: '/network-discovery', label: 'Network Discovery', icon: Search },
   { path: '/config-backup', label: 'Config Backup', icon: Database },
+  { path: '/firmware-upgrade', label: 'Bulk OS Upgrade', icon: UploadCloud },
   { path: '/alerts', label: 'Alerts', icon: Bell },
   { path: '/incidents', label: 'Incidents', icon: FileWarning },
   { path: '/performance', label: 'Performance', icon: Activity },
@@ -49,8 +53,9 @@ const navItems = [
   { path: '/agents', label: 'AI Agents', icon: Bot },
   { path: '/escalation', label: 'Escalation', icon: AlertCircle },
   { path: '/reports', label: 'Reports', icon: FileText },
-  { path: '/configuration', label: 'Configuration', icon: Settings },
+  // { path: '/configuration', label: 'Configuration', icon: Settings },
   { path: '/sla', label: 'SLA Management', icon: Target },
+  { path: '/cmdb', label: 'CMDB / Inventory', icon: Server },
   { path: '/user-management', label: 'User Management', icon: Users, adminOnly: true },
   { path: '/audit-logs', label: 'Audit Logs', icon: Shield, adminOnly: true },
   { path: '/settings', label: 'Settings', icon: Cog },

@@ -25,9 +25,10 @@ import {
   Trash2,
   Settings
 } from 'lucide-react';
+import { getApiUrl } from '../services/config';
+import { getAuthHeader } from '../services/auth';
 
-const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
-const API = `${BACKEND_URL}/api`;
+const API = getApiUrl();
 
 const StatusBadge = ({ status }) => {
   const styles = {
@@ -76,10 +77,11 @@ export default function AgentsPage() {
 
   const fetchData = async () => {
     try {
+      const headers = getAuthHeader();
       const [agentsRes, codesRes, devicesRes] = await Promise.all([
-        axios.get(`${API}/agents`),
-        axios.get(`${API}/activation-codes`),
-        axios.get(`${API}/devices`)
+        axios.get(`${API}/agents`, { headers }),
+        axios.get(`${API}/activation-codes`, { headers }),
+        axios.get(`${API}/devices`, { headers })
       ]);
       setAgents(agentsRes.data);
       setActivationCodes(codesRes.data);
@@ -97,7 +99,7 @@ export default function AgentsPage() {
 
   const handleCreateAgent = async () => {
     try {
-      await axios.post(`${API}/agents`, formData);
+      await axios.post(`${API}/agents`, formData, { headers: getAuthHeader() });
       toast.success('Agent created successfully');
       setIsCreateOpen(false);
       setFormData({ name: '', description: '', activation_code: '' });
@@ -111,7 +113,7 @@ export default function AgentsPage() {
     if (!formData.activation_code) return;
     setVerifying(true);
     try {
-      const response = await axios.post(`${API}/activation-codes/verify?code=${formData.activation_code}`);
+      const response = await axios.post(`${API}/activation-codes/verify?code=${formData.activation_code}`, {}, { headers: getAuthHeader() });
       if (response.data.valid) {
         toast.success('Activation code is valid');
       } else {
@@ -127,7 +129,7 @@ export default function AgentsPage() {
   const handleGenerateCodes = async () => {
     setGenerating(true);
     try {
-      const response = await axios.post(`${API}/activation-codes/generate?count=200`);
+      const response = await axios.post(`${API}/activation-codes/generate?count=200`, {}, { headers: getAuthHeader() });
       toast.success(`Generated ${response.data.codes.length} activation codes`);
       fetchData();
     } catch (error) {
@@ -140,11 +142,11 @@ export default function AgentsPage() {
   const handleAssignDevice = async (deviceId) => {
     if (!selectedAgent) return;
     try {
-      await axios.post(`${API}/agents/${selectedAgent.id}/assign-device/${deviceId}`);
+      await axios.post(`${API}/agents/${selectedAgent.id}/assign-device/${deviceId}`, {}, { headers: getAuthHeader() });
       toast.success('Device assigned');
       fetchData();
       // Update selected agent
-      const updatedAgent = await axios.get(`${API}/agents/${selectedAgent.id}`);
+      const updatedAgent = await axios.get(`${API}/agents/${selectedAgent.id}`, { headers: getAuthHeader() });
       setSelectedAgent(updatedAgent.data);
     } catch (error) {
       toast.error(error.response?.data?.detail || 'Failed to assign device');
@@ -154,10 +156,10 @@ export default function AgentsPage() {
   const handleUnassignDevice = async (deviceId) => {
     if (!selectedAgent) return;
     try {
-      await axios.post(`${API}/agents/${selectedAgent.id}/unassign-device/${deviceId}`);
+      await axios.post(`${API}/agents/${selectedAgent.id}/unassign-device/${deviceId}`, {}, { headers: getAuthHeader() });
       toast.success('Device unassigned');
       fetchData();
-      const updatedAgent = await axios.get(`${API}/agents/${selectedAgent.id}`);
+      const updatedAgent = await axios.get(`${API}/agents/${selectedAgent.id}`, { headers: getAuthHeader() });
       setSelectedAgent(updatedAgent.data);
     } catch (error) {
       toast.error(error.response?.data?.detail || 'Failed to unassign device');
@@ -381,7 +383,7 @@ export default function AgentsPage() {
           <Card className="bg-white border-border/50">
             <CardHeader className="flex flex-row items-center justify-between">
               <CardTitle className="text-lg font-semibold">Activation Codes</CardTitle>
-              <Button onClick={handleGenerateCodes} disabled={generating}>
+              {/* <Button onClick={handleGenerateCodes} disabled={generating}>
                 {generating ? (
                   <>
                     <Loader2 className="h-4 w-4 mr-2 animate-spin" />
@@ -393,7 +395,7 @@ export default function AgentsPage() {
                     Generate 200 Codes
                   </>
                 )}
-              </Button>
+              </Button> */}
             </CardHeader>
             <CardContent className="p-0">
               <ScrollArea className="h-[400px]">
