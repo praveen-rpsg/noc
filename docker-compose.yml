@@ -1,13 +1,13 @@
 # ATECH NOC Commander - Docker Compose
 # Complete deployment with Backend, Frontend, and MongoDB
 
-version: '3.8'
+name: ${COMPOSE_PROJECT_NAME:-ainoc-local}
+
 
 services:
   # MongoDB Database
   mongodb:
     image: mongo:7.0
-    container_name: atech-noc-mongodb
     restart: unless-stopped
     environment:
       MONGO_INITDB_ROOT_USERNAME: ${MONGO_ROOT_USERNAME:-admin}
@@ -17,7 +17,7 @@ services:
       - mongodb_data:/data/db
       - ./docker/mongo-init.js:/docker-entrypoint-initdb.d/mongo-init.js:ro
     ports:
-      - "27017:27017"
+      - "${AINOC_MONGODB_PORT:-27117}:27017"
     networks:
       - atech-network
     healthcheck:
@@ -32,30 +32,34 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
-    container_name: atech-noc-backend
     restart: unless-stopped
     environment:
-      - MONGO_URL=mongodb://${MONGO_ROOT_USERNAME:-admin}:${MONGO_ROOT_PASSWORD:-adminpassword}@mongodb:27017
+      - MONGO_URL=mongodb://${MONGO_ROOT_USERNAME:-admin}:${MONGO_ROOT_PASSWORD:-adminpassword}@mongodb:27017/?authSource=admin
       - DB_NAME=${DB_NAME:-atech_noc}
       - JWT_SECRET_KEY=${JWT_SECRET_KEY:-your-super-secret-key-change-in-production}
       - JWT_ALGORITHM=HS256
       - JWT_ACCESS_TOKEN_EXPIRE_MINUTES=1440
       - HOST=0.0.0.0
       - PORT=8001
+      - DEVICE_SECRET_KEY=${DEVICE_SECRET_KEY:-MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU2Nzg5MDE=}
       - EMERGENT_LLM_KEY=${EMERGENT_LLM_KEY:-}
     ports:
-      - "8001:8001"
+      - "${AINOC_BACKEND_PORT:-8011}:8001"
+      - "${AINOC_SNMP_TRAP_PORT:-10162}:1162/udp"
+      - "${AINOC_TFTP_PORT:-6900}:69/udp"
     depends_on:
       mongodb:
         condition: service_healthy
     networks:
       - atech-network
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8001/api/health"]
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:8001/api/health"]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 10s
+    volumes:
+      - ./tftpboot:/app/tftpboot  
 
   # Frontend Web Server
   frontend:
@@ -63,11 +67,10 @@ services:
       context: ./frontend
       dockerfile: Dockerfile
       args:
-        - REACT_APP_BACKEND_URL=${REACT_APP_BACKEND_URL:-}
-    container_name: atech-noc-frontend
+        - REACT_APP_BACKEND_URL=${REACT_APP_BACKEND_URL:-http://localhost:8011}
     restart: unless-stopped
     ports:
-      - "3000:3000"
+      - "${AINOC_FRONTEND_PORT:-3010}:3000"
     depends_on:
       backend:
         condition: service_healthy

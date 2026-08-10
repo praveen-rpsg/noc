@@ -12,6 +12,8 @@ NC='\033[0m'
 
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 cd "$SCRIPT_DIR"
+COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME:-ainoc-local}"
+COMPOSE=(docker compose --project-name "$COMPOSE_PROJECT_NAME")
 
 print_header() {
     echo -e "${BLUE}"
@@ -36,16 +38,9 @@ print_warning() {
 # Check if .env exists
 check_env() {
     if [ ! -f ".env" ]; then
-        print_warning ".env file not found. Creating from template..."
-        cp docker/.env.example .env
-        print_status "Created .env file. Please edit it with your configuration."
-        echo ""
-        echo "Required settings:"
-        echo "  - MONGO_ROOT_PASSWORD"
-        echo "  - JWT_SECRET_KEY"
-        echo ""
-        echo "Run: nano .env"
-        exit 1
+        print_warning ".env file not found. Creating local defaults from template..."
+        cp docker/local.env.example .env
+        print_status "Created .env. Edit it if you need different ports or secrets."
     fi
 }
 
@@ -58,10 +53,10 @@ start() {
     
     if [ "$mode" == "prod" ]; then
         echo "Starting in PRODUCTION mode..."
-        docker-compose -f docker-compose.prod.yml up -d --build
+        "${COMPOSE[@]}" -f docker-compose.prod.yml up -d --build
     else
         echo "Starting in DEVELOPMENT mode..."
-        docker-compose up -d --build
+        "${COMPOSE[@]}" up -d --build
     fi
     
     echo ""
@@ -70,7 +65,7 @@ start() {
     echo "Waiting for services to be healthy..."
     sleep 10
     
-    docker-compose ps
+    "${COMPOSE[@]}" ps
     
     echo ""
     echo -e "${GREEN}=========================================="
@@ -91,7 +86,7 @@ start() {
 stop() {
     print_header
     echo "Stopping services..."
-    docker-compose down
+    "${COMPOSE[@]}" down
     print_status "Services stopped"
 }
 
@@ -99,7 +94,7 @@ stop() {
 restart() {
     print_header
     echo "Restarting services..."
-    docker-compose restart
+    "${COMPOSE[@]}" restart
     print_status "Services restarted"
 }
 
@@ -107,19 +102,19 @@ restart() {
 logs() {
     local service=$1
     if [ -n "$service" ]; then
-        docker-compose logs -f "$service"
+        "${COMPOSE[@]}" logs -f "$service"
     else
-        docker-compose logs -f
+        "${COMPOSE[@]}" logs -f
     fi
 }
 
 # Show status
 status() {
     print_header
-    docker-compose ps
+    "${COMPOSE[@]}" ps
     echo ""
     echo "Health Status:"
-    for container in $(docker-compose ps -q); do
+    for container in $("${COMPOSE[@]}" ps -q); do
         name=$(docker inspect --format='{{.Name}}' "$container" | sed 's/\///')
         health=$(docker inspect --format='{{.State.Health.Status}}' "$container" 2>/dev/null || echo "N/A")
         echo "  $name: $health"
@@ -130,7 +125,7 @@ status() {
 rebuild() {
     print_header
     echo "Rebuilding services..."
-    docker-compose build --no-cache
+    "${COMPOSE[@]}" build --no-cache
     print_status "Rebuild complete"
     echo ""
     echo "Run './docker.sh start' to start the new containers"
@@ -147,7 +142,7 @@ backup() {
     # Get MongoDB credentials from .env
     source .env
     
-    docker-compose exec -T mongodb mongodump \
+    "${COMPOSE[@]}" exec -T mongodb mongodump \
         --username "${MONGO_ROOT_USERNAME:-admin}" \
         --password "${MONGO_ROOT_PASSWORD}" \
         --authenticationDatabase admin \
@@ -177,7 +172,7 @@ restore() {
     # Get MongoDB credentials from .env
     source .env
     
-    docker-compose exec -T mongodb mongorestore \
+    "${COMPOSE[@]}" exec -T mongodb mongorestore \
         --username "${MONGO_ROOT_USERNAME:-admin}" \
         --password "${MONGO_ROOT_PASSWORD}" \
         --authenticationDatabase admin \
@@ -193,7 +188,7 @@ clean() {
     read -p "Are you sure? (y/N): " confirm
     
     if [ "$confirm" == "y" ] || [ "$confirm" == "Y" ]; then
-        docker-compose down -v --rmi local
+        "${COMPOSE[@]}" down -v --rmi local
         print_status "Cleanup complete"
     else
         echo "Cancelled"
