@@ -37,7 +37,6 @@ COPY network_services.py .
 COPY device_monitor.py .
 COPY upgrade_manager.py .
 COPY shared.py .
-COPY dbvar.env .
 COPY snmp_receiver.py .
 COPY cmdb_router.py .
 COPY cmdb_manager.py .
