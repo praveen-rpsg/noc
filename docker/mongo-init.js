@@ -31,6 +31,15 @@ db.users.insertOne({
   id: "admin-" + new Date().getTime(),
   email: "admin@noc.com",
   name: "Admin User",
+  password_hash: "$2b$12$R.8C9fyKXMjUZgTtMiS/ce4tvGmfH9mfNw0u1/yca1Yl3jFBi7TTm",
+  role: "admin",
+  is_active: true,
+  created_at: new Date().toISOString()
+});
+db.users.insertOne({
+  id: "admin-" + new Date().getTime(),
+  email: "joy.mukherjee@ameyatechnologies.com",
+  name: "Admin User",
   password_hash: "$2b$12$LQv3c1yqBWVHxkd0LHAkCOYz6TtxMQJqhN8/X4.GQwOuLAFiQxA8.",
   role: "admin",
   is_active: true,
